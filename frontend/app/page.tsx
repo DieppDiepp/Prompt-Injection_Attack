@@ -4,10 +4,16 @@ import {
   ArrowPathIcon,
   BoltIcon,
   ChatBubbleLeftRightIcon,
+  ClipboardDocumentIcon,
+  CommandLineIcon,
+  LinkIcon,
   PaperAirplaneIcon,
+  PlusIcon,
   SignalIcon,
   StopIcon,
+  UserMinusIcon,
   UserGroupIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -80,9 +86,13 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
 export default function App() {
   const queryClient = useQueryClient();
   const [selectedRoomId, setSelectedRoomId] = useState("demo-lobby");
+  const [drawer, setDrawer] = useState<"agent" | "room" | null>(null);
+  const [runtimeUrl, setRuntimeUrl] = useState("");
   const [prompt, setPrompt] = useState(
     "What should an open network of agents discuss first?",
   );
+
+  useEffect(() => setRuntimeUrl(window.location.origin), []);
 
   const roomsQuery = useQuery({
     queryKey: ["rooms"],
@@ -133,15 +143,29 @@ export default function App() {
 
   const broadcast = useMutation({
     mutationFn: async (content: string) => {
-      await requestJSON("/v1/demo/setup", { method: "POST" });
-      return requestJSON<DiscussionFeed>("/v1/demo/start", {
+      if (
+        selectedRoomId === "demo-lobby" &&
+        !rooms.some((room) => room.roomId === "demo-lobby")
+      ) {
+        await requestJSON("/v1/demo/setup", { method: "POST" });
+      }
+      return requestJSON<{ discussion: Discussion; message: Message }>(
+        `/v1/rooms/${encodeURIComponent(selectedRoomId)}/discussions`,
+        {
         method: "POST",
-        body: JSON.stringify({ content }),
-      });
+          body: JSON.stringify({
+            senderAgentId: "user",
+            content,
+            maxMessages: 30,
+            timeoutSeconds: 300,
+          }),
+        },
+      );
     },
     onSuccess: async () => {
-      setSelectedRoomId("demo-lobby");
-      await queryClient.invalidateQueries();
+      await queryClient.invalidateQueries({
+        queryKey: ["latest-discussion", selectedRoomId],
+      });
     },
   });
 
@@ -157,12 +181,29 @@ export default function App() {
       }),
   });
 
+  const removeAgent = useMutation({
+    mutationFn: (agentId: string) =>
+      requestJSON<void>(
+        `/v1/rooms/${encodeURIComponent(selectedRoomId)}/agents/${encodeURIComponent(agentId)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["room-agents", selectedRoomId],
+      });
+    },
+  });
+
   const feed = feedQuery.data;
   const agents = agentsQuery.data?.agents ?? [];
   const rooms = roomsQuery.data?.rooms ?? [];
   const isLive = feed?.discussion.status === "active";
   const error =
-    roomsQuery.error ?? agentsQuery.error ?? feedQuery.error ?? broadcast.error;
+    roomsQuery.error ??
+    agentsQuery.error ??
+    feedQuery.error ??
+    broadcast.error ??
+    removeAgent.error;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -210,7 +251,18 @@ export default function App() {
               <span className="section-kicker">Network</span>
               <h1 id="agents-title">Agents</h1>
             </div>
-            <span className="count-badge">{agents.length}</span>
+            <div className="heading-actions">
+              <span className="count-badge">{agents.length}</span>
+              <button
+                className="mini-action"
+                disabled={!rooms.length}
+                onClick={() => setDrawer("agent")}
+                type="button"
+              >
+                <LinkIcon />
+                <span>Connect</span>
+              </button>
+            </div>
           </div>
 
           <div className="agent-list">
@@ -226,10 +278,25 @@ export default function App() {
                     <strong>{agent.name}</strong>
                     <span>{agent.framework ?? "custom"}</span>
                   </div>
-                  <span
-                    className={`agent-state ${agent.active ? "online" : ""}`}
-                    aria-label={agent.active ? "online" : "offline"}
-                  />
+                  <div className="agent-actions">
+                    <span
+                      className={`agent-state ${agent.active ? "online" : ""}`}
+                      aria-label={agent.active ? "online" : "offline"}
+                    />
+                    <button
+                      aria-label={`Remove ${agent.name} from room`}
+                      className="kick-agent-button"
+                      disabled={
+                        removeAgent.isPending &&
+                        removeAgent.variables === agent.agentId
+                      }
+                      onClick={() => removeAgent.mutate(agent.agentId)}
+                      title="Remove from room"
+                      type="button"
+                    >
+                      <UserMinusIcon />
+                    </button>
+                  </div>
                 </article>
               ))
             ) : (
@@ -241,7 +308,17 @@ export default function App() {
           </div>
 
           <div className="rooms-block">
-            <span className="section-kicker">Rooms</span>
+            <div className="rooms-heading">
+              <span className="section-kicker">Rooms</span>
+              <button
+                className="small-icon-button"
+                onClick={() => setDrawer("room")}
+                title="Create room"
+                type="button"
+              >
+                <PlusIcon />
+              </button>
+            </div>
             {rooms.length ? (
               rooms.map((room) => (
                 <button
@@ -390,7 +467,364 @@ export default function App() {
           </button>
         </aside>
       </main>
+
+      <AgentDrawer
+        onClose={() => setDrawer(null)}
+        onConnected={async () => {
+          await queryClient.invalidateQueries();
+          setDrawer(null);
+        }}
+        open={drawer === "agent"}
+        roomId={selectedRoomId}
+        runtimeUrl={runtimeUrl}
+      />
+      <RoomDrawer
+        onClose={() => setDrawer(null)}
+        onCreated={async (room) => {
+          setSelectedRoomId(room.roomId);
+          await queryClient.invalidateQueries();
+          setDrawer(null);
+        }}
+        open={drawer === "room"}
+      />
     </div>
+  );
+}
+
+function AgentDrawer({
+  open,
+  roomId,
+  runtimeUrl,
+  onClose,
+  onConnected,
+}: {
+  open: boolean;
+  roomId: string;
+  runtimeUrl: string;
+  onClose: () => void;
+  onConnected: () => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"manual" | "self">("manual");
+  const [copied, setCopied] = useState(false);
+  const [form, setForm] = useState({
+    agentId: "",
+    name: "",
+    framework: "custom",
+    webhookUrl: "",
+    capabilities: "",
+  });
+
+  const connect = useMutation({
+    mutationFn: async () => {
+      const capabilities = form.capabilities
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      await requestJSON<Agent>("/v1/agents", {
+        method: "POST",
+        body: JSON.stringify({ ...form, capabilities }),
+      });
+      await requestJSON<void>(
+        `/v1/rooms/${encodeURIComponent(roomId)}/agents`,
+        {
+          method: "POST",
+          body: JSON.stringify({ agentId: form.agentId }),
+        },
+      );
+    },
+    onSuccess: onConnected,
+  });
+
+  const bootstrap = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          protocolVersion: "0.1",
+          baseUrl: runtimeUrl,
+          roomId,
+          register: "POST /v1/agents",
+          join: `POST /v1/rooms/${roomId}/agents`,
+          reply: "POST /v1/discussions/{discussionId}/messages",
+        },
+        null,
+        2,
+      ),
+    [roomId, runtimeUrl],
+  );
+
+  const valid =
+    /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(form.agentId) &&
+    form.name.trim().length > 0 &&
+    isHTTPURL(form.webhookUrl);
+
+  return (
+    <Drawer open={open} title="Connect agent" onClose={onClose}>
+      <div className="segmented-control" role="tablist">
+        <button
+          aria-selected={mode === "manual"}
+          className={mode === "manual" ? "selected" : ""}
+          onClick={() => setMode("manual")}
+          role="tab"
+          type="button"
+        >
+          <LinkIcon />
+          Manual
+        </button>
+        <button
+          aria-selected={mode === "self"}
+          className={mode === "self" ? "selected" : ""}
+          onClick={() => setMode("self")}
+          role="tab"
+          type="button"
+        >
+          <CommandLineIcon />
+          Self-register
+        </button>
+      </div>
+
+      {mode === "manual" ? (
+        <form
+          className="drawer-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (valid) connect.mutate();
+          }}
+        >
+          <FormField label="Agent ID" hint="letters, numbers, _ or -">
+            <input
+              autoComplete="off"
+              onChange={(event) =>
+                setForm((current) => ({ ...current, agentId: event.target.value }))
+              }
+              placeholder="research-agent"
+              required
+              value={form.agentId}
+            />
+          </FormField>
+          <FormField label="Display name">
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, name: event.target.value }))
+              }
+              placeholder="Research Agent"
+              required
+              value={form.name}
+            />
+          </FormField>
+          <FormField label="Framework">
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, framework: event.target.value }))
+              }
+              placeholder="langgraph"
+              value={form.framework}
+            />
+          </FormField>
+          <FormField label="Webhook URL">
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, webhookUrl: event.target.value }))
+              }
+              placeholder="https://agent.example.com/airc/webhook"
+              required
+              type="url"
+              value={form.webhookUrl}
+            />
+          </FormField>
+          <FormField label="Capabilities" hint="comma separated">
+            <input
+              onChange={(event) =>
+                setForm((current) => ({ ...current, capabilities: event.target.value }))
+              }
+              placeholder="research, summarize"
+              value={form.capabilities}
+            />
+          </FormField>
+          <div className="target-room">
+            <span>Join room</span>
+            <strong># {roomId}</strong>
+          </div>
+          {connect.error && (
+            <p className="form-error" role="alert">
+              Agent connection failed. Check the registration fields.
+            </p>
+          )}
+          <button
+            className="primary-drawer-action"
+            disabled={!valid || connect.isPending}
+            type="submit"
+          >
+            <LinkIcon />
+            {connect.isPending ? "Connecting" : "Register and join"}
+          </button>
+        </form>
+      ) : (
+        <div className="self-register-panel">
+          <dl>
+            <div>
+              <dt>Runtime</dt>
+              <dd>{runtimeUrl || "local runtime"}</dd>
+            </div>
+            <div>
+              <dt>Room</dt>
+              <dd># {roomId}</dd>
+            </div>
+          </dl>
+          <div className="bootstrap-code">
+            <div>
+              <span>airc-bootstrap.json</span>
+              <button
+                onClick={async () => {
+                  await navigator.clipboard.writeText(bootstrap);
+                  setCopied(true);
+                }}
+                title="Copy bootstrap configuration"
+                type="button"
+              >
+                <ClipboardDocumentIcon />
+              </button>
+            </div>
+            <pre>{bootstrap}</pre>
+          </div>
+          <div className="contract-steps">
+            <span><b>01</b> Register agent metadata and webhook</span>
+            <span><b>02</b> Join the selected room</span>
+            <span><b>03</b> Accept webhook events and post replies</span>
+          </div>
+          <div className="copy-state">{copied ? "Configuration copied" : "No API key required for MVP"}</div>
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+function RoomDrawer({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (room: Room) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [roomId, setRoomId] = useState("");
+  const createRoom = useMutation({
+    mutationFn: () =>
+      requestJSON<Room>("/v1/rooms", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim(), roomId: roomId.trim() || undefined }),
+      }),
+    onSuccess: onCreated,
+  });
+  const validId =
+    !roomId || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(roomId);
+
+  return (
+    <Drawer open={open} title="Create room" onClose={onClose}>
+      <form
+        className="drawer-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name.trim() && validId) createRoom.mutate();
+        }}
+      >
+        <FormField label="Room name">
+          <input
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Engineering Debate"
+            required
+            value={name}
+          />
+        </FormField>
+        <FormField label="Room ID" hint="optional stable identifier">
+          <input
+            autoComplete="off"
+            onChange={(event) => setRoomId(event.target.value)}
+            placeholder="engineering-debate"
+            value={roomId}
+          />
+        </FormField>
+        <div className="room-preview">
+          <ChatBubbleLeftRightIcon />
+          <span># {roomId || "generated-room-id"}</span>
+        </div>
+        {createRoom.error && (
+          <p className="form-error" role="alert">
+            Room creation failed. Check the room identifier.
+          </p>
+        )}
+        <button
+          className="primary-drawer-action"
+          disabled={!name.trim() || !validId || createRoom.isPending}
+          type="submit"
+        >
+          <PlusIcon />
+          {createRoom.isPending ? "Creating" : "Create room"}
+        </button>
+      </form>
+    </Drawer>
+  );
+}
+
+function Drawer({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="drawer-layer">
+      <button
+        aria-label="Close panel"
+        className="drawer-scrim"
+        onClick={onClose}
+        type="button"
+      />
+      <aside className="setup-drawer" aria-label={title}>
+        <header>
+          <div>
+            <span className="section-kicker">AIRC network</span>
+            <h2>{title}</h2>
+          </div>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            title="Close panel"
+            type="button"
+          >
+            <XMarkIcon />
+          </button>
+        </header>
+        <div className="drawer-content">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+function FormField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="form-field">
+      <span>
+        {label}
+        {hint && <small>{hint}</small>}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -496,4 +930,13 @@ function timeRemaining(expiresAt: string): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function isHTTPURL(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

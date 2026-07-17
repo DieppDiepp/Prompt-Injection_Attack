@@ -239,6 +239,56 @@ p {
   font-size: 0.68rem;
 }
 
+.heading-actions,
+.rooms-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.mini-action,
+.small-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+
+.mini-action {
+  min-height: 28px;
+  padding: 0 0.5rem;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 650;
+}
+
+.mini-action svg,
+.small-icon-button svg {
+  width: 14px;
+}
+
+.small-icon-button {
+  width: 25px;
+  height: 25px;
+}
+
+.mini-action:hover:not(:disabled),
+.small-icon-button:hover {
+  color: white;
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.mini-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .agent-list {
   margin-top: 1.2rem;
 }
@@ -246,10 +296,44 @@ p {
 .agent-row {
   min-height: 58px;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 10px;
+  grid-template-columns: 34px minmax(0, 1fr) 48px;
   gap: 0.7rem;
   align-items: center;
   border-bottom: 1px solid var(--line);
+}
+
+.agent-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.kick-agent-button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+
+.kick-agent-button:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: #efb8ae;
+}
+
+.kick-agent-button:disabled {
+  cursor: wait;
+  opacity: 0.4;
+}
+
+.kick-agent-button svg {
+  width: 15px;
 }
 
 .agent-avatar {
@@ -304,6 +388,10 @@ p {
 
 .rooms-block {
   margin-top: 2.2rem;
+}
+
+.rooms-heading .section-kicker {
+  margin-bottom: 0;
 }
 
 .room-button {
@@ -765,6 +853,302 @@ p {
   border-color: var(--accent);
 }
 
+.drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+}
+
+.drawer-scrim {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: rgba(23, 25, 28, 0.34);
+  backdrop-filter: blur(2px);
+  cursor: default;
+}
+
+.setup-drawer {
+  min-width: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  border-left: 1px solid var(--line-strong);
+  background: var(--surface);
+  box-shadow: -20px 0 50px rgba(36, 45, 51, 0.16);
+  animation: drawer-in 220ms ease both;
+}
+
+.setup-drawer > header {
+  min-height: 72px;
+  padding: 0 1.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+
+.setup-drawer > header h2 {
+  font-size: 1rem;
+}
+
+.drawer-content {
+  padding: 1.15rem;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-muted);
+}
+
+.segmented-control button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.segmented-control button + button {
+  border-left: 1px solid var(--line-strong);
+}
+
+.segmented-control button.selected {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.segmented-control svg {
+  width: 15px;
+}
+
+.drawer-form,
+.self-register-panel {
+  margin-top: 1.4rem;
+}
+
+.form-field {
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.form-field > span {
+  margin-bottom: 0.38rem;
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.form-field small {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.57rem;
+  font-weight: 400;
+}
+
+.form-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 0.78rem;
+}
+
+.form-field input::placeholder {
+  color: #9aa0a6;
+}
+
+.target-room,
+.room-preview {
+  min-height: 48px;
+  padding: 0 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  font-size: 0.7rem;
+}
+
+.target-room span {
+  color: var(--muted);
+}
+
+.target-room strong {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+}
+
+.room-preview {
+  justify-content: flex-start;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.room-preview svg {
+  width: 16px;
+}
+
+.form-error {
+  margin-top: 0.8rem;
+  color: #8c2f21;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.primary-drawer-action {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 0;
+  color: white;
+  background: var(--ink);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: background 180ms ease, transform 120ms ease;
+}
+
+.primary-drawer-action:hover:not(:disabled) {
+  background: var(--signal);
+}
+
+.primary-drawer-action:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.primary-drawer-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.primary-drawer-action svg {
+  width: 16px;
+}
+
+.self-register-panel dl {
+  margin: 0 0 1rem;
+}
+
+.self-register-panel dl > div {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 75px minmax(0, 1fr);
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.self-register-panel dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.self-register-panel dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bootstrap-code {
+  border: 1px solid var(--line-strong);
+  background: #202428;
+}
+
+.bootstrap-code > div {
+  min-height: 38px;
+  padding: 0 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #3d444a;
+  color: #b8c0c6;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+}
+
+.bootstrap-code button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: #d9e0e4;
+  background: transparent;
+  cursor: pointer;
+}
+
+.bootstrap-code button:hover {
+  color: white;
+  background: #343a3f;
+}
+
+.bootstrap-code svg {
+  width: 15px;
+}
+
+.bootstrap-code pre {
+  margin: 0;
+  padding: 0.85rem;
+  overflow-x: auto;
+  color: #dce5df;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.contract-steps {
+  margin-top: 1rem;
+}
+
+.contract-steps span {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.69rem;
+}
+
+.contract-steps b {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+}
+
+.copy-state {
+  margin-top: 1rem;
+  color: var(--signal);
+  font-family: var(--font-mono);
+  font-size: 0.61rem;
+}
+
 .agent-skeleton,
 .message-skeletons > div {
   animation: skeleton-pulse 1.2s ease-in-out infinite alternate;
@@ -833,6 +1217,11 @@ p {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @media (max-width: 1050px) {
   .workspace {
     grid-template-columns: 190px minmax(420px, 1fr);
@@ -893,16 +1282,24 @@ p {
     border-bottom: 1px solid var(--line-strong);
   }
 
-  .agent-panel .panel-heading,
-  .rooms-block {
-    display: none;
+  .agent-panel .panel-heading {
+    min-height: 40px;
   }
 
   .agent-list {
-    margin-top: 0;
+    margin-top: 0.55rem;
     display: flex;
     gap: 0.75rem;
     overflow-x: auto;
+  }
+
+  .rooms-block {
+    margin-top: 0.8rem;
+  }
+
+  .rooms-block .room-button {
+    width: auto;
+    padding-right: 0.7rem;
   }
 
   .agent-row {
@@ -966,6 +1363,19 @@ p {
   .event-legend,
   .quota-track {
     display: none;
+  }
+
+  .drawer-layer {
+    grid-template-columns: 1fr;
+  }
+
+  .drawer-scrim {
+    display: none;
+  }
+
+  .setup-drawer {
+    width: 100%;
+    border-left: 0;
   }
 }
 

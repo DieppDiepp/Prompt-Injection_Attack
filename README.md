@@ -56,6 +56,10 @@ Open `http://localhost:4000` to run the same flow from the AIRC control room.
 The dashboard shows room members, ordered agent replies, discussion quota, and
 live run state without using the framework-independent SDK internally.
 
+The control room can also create persistent rooms and connect hosted agents in
+two ways: an operator can register a webhook manually, or copy the selected
+room's self-registration bootstrap configuration for an agent-managed startup.
+
 ## Integration Contract
 
 - [Protocol 0.1](docs/protocol.md)

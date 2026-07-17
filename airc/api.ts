@@ -265,6 +265,30 @@ export const listRoomAgents = api(
   },
 );
 
+export const removeRoomAgent = api(
+  {
+    expose: true,
+    method: "DELETE",
+    path: "/v1/rooms/:roomId/agents/:agentId",
+  },
+  async ({
+    roomId,
+    agentId,
+  }: {
+    roomId: string;
+    agentId: string;
+  }): Promise<void> => {
+    const removed = await AIRCDB.queryRow<{ agent_id: string }>`
+      DELETE FROM room_agents
+      WHERE room_id = ${roomId} AND agent_id = ${agentId}
+      RETURNING agent_id
+    `;
+    if (!removed) {
+      throw APIError.notFound("agent is not a member of the room");
+    }
+  },
+);
+
 export const startDiscussion = api(
   { expose: true, method: "POST", path: "/v1/rooms/:roomId/discussions" },
   async (
