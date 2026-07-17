@@ -1,277 +1,499 @@
 "use client";
 
+import {
+  ArrowPathIcon,
+  BoltIcon,
+  ChatBubbleLeftRightIcon,
+  PaperAirplaneIcon,
+  SignalIcon,
+  StopIcon,
+  UserGroupIcon,
+} from "@heroicons/react/24/outline";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Client, { monitor, site } from "@/app/lib/client";
-import { FC, useEffect, useState } from "react";
-import { DateTime } from "luxon";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
-function App() {
-  const [baseURL, setBaseURL] = useState("");
-  useEffect(() => setBaseURL(window.location.origin), []);
+interface Agent {
+  agentId: string;
+  name: string;
+  webhookUrl: string;
+  framework?: string;
+  capabilities: string[];
+  active: boolean;
+}
 
-  if (!baseURL) return null;
+interface Room {
+  roomId: string;
+  name: string;
+}
+
+interface Discussion {
+  discussionId: string;
+  roomId: string;
+  status: "active" | "stopped" | "quota_exhausted" | "expired";
+  maxMessages: number;
+  messageCount: number;
+  expiresAt: string;
+  createdAt: string;
+}
+
+interface Message {
+  protocolVersion: "0.1";
+  messageId: string;
+  discussionId: string;
+  roomId: string;
+  senderAgentId: string;
+  sequence: number;
+  type: "message" | "system";
+  content: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface DiscussionFeed {
+  discussion: Discussion;
+  messages: Message[];
+}
+
+class HTTPError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: init?.body
+      ? { "Content-Type": "application/json", ...init.headers }
+      : init?.headers,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new HTTPError(response.status, body || `HTTP ${response.status}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+}
+
+export default function App() {
+  const queryClient = useQueryClient();
+  const [selectedRoomId, setSelectedRoomId] = useState("demo-lobby");
+  const [prompt, setPrompt] = useState(
+    "What should an open network of agents discuss first?",
+  );
+
+  const roomsQuery = useQuery({
+    queryKey: ["rooms"],
+    queryFn: () => requestJSON<{ rooms: Room[] }>("/v1/rooms"),
+    refetchInterval: 5_000,
+  });
+
+  const agentsQuery = useQuery({
+    queryKey: ["room-agents", selectedRoomId],
+    queryFn: async () => {
+      try {
+        return await requestJSON<{ agents: Agent[] }>(
+          `/v1/rooms/${encodeURIComponent(selectedRoomId)}/agents`,
+        );
+      } catch (error) {
+        if (error instanceof HTTPError && error.status === 404) {
+          return { agents: [] };
+        }
+        throw error;
+      }
+    },
+    refetchInterval: 3_000,
+  });
+
+  const feedQuery = useQuery({
+    queryKey: ["latest-discussion", selectedRoomId],
+    queryFn: async (): Promise<DiscussionFeed | null> => {
+      try {
+        return await requestJSON<DiscussionFeed>(
+          `/v1/rooms/${encodeURIComponent(selectedRoomId)}/discussions/latest`,
+        );
+      } catch (error) {
+        if (error instanceof HTTPError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    refetchInterval: 800,
+  });
+
+  useEffect(() => {
+    const rooms = roomsQuery.data?.rooms;
+    if (rooms?.length && !rooms.some((room) => room.roomId === selectedRoomId)) {
+      setSelectedRoomId(rooms[0].roomId);
+    }
+  }, [roomsQuery.data, selectedRoomId]);
+
+  const broadcast = useMutation({
+    mutationFn: async (content: string) => {
+      await requestJSON("/v1/demo/setup", { method: "POST" });
+      return requestJSON<DiscussionFeed>("/v1/demo/start", {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      });
+    },
+    onSuccess: async () => {
+      setSelectedRoomId("demo-lobby");
+      await queryClient.invalidateQueries();
+    },
+  });
+
+  const stopDiscussion = useMutation({
+    mutationFn: (discussionId: string) =>
+      requestJSON<void>(
+        `/v1/discussions/${encodeURIComponent(discussionId)}/stop`,
+        { method: "POST" },
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["latest-discussion", selectedRoomId],
+      }),
+  });
+
+  const feed = feedQuery.data;
+  const agents = agentsQuery.data?.agents ?? [];
+  const rooms = roomsQuery.data?.rooms ?? [];
+  const isLive = feed?.discussion.status === "active";
+  const error =
+    roomsQuery.error ?? agentsQuery.error ?? feedQuery.error ?? broadcast.error;
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = prompt.trim();
+    if (content) {
+      broadcast.mutate(content);
+    }
+  };
 
   return (
-    <>
-      <div className="min-h-full container px-4 mx-auto my-16">
-        <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-3xl sm:tracking-tight">
-          Uptime Monitoring
-        </h2>
+    <div className="app-shell">
+      <a className="skip-link" href="#conversation">
+        Skip to conversation
+      </a>
 
-        <main className="pt-8 pb-16">
-          <SiteList client={new Client(baseURL)} />
-        </main>
+      <header className="topbar">
+        <div className="brand-lockup" aria-label="AIRC control room">
+          <span className="brand-mark">A</span>
+          <span className="brand-name">AIRC</span>
+          <span className="brand-section">Control room</span>
+        </div>
+        <div className="runtime-state">
+          <span className={`live-dot ${isLive ? "active" : ""}`} />
+          <span>{isLive ? "Discussion live" : "Runtime ready"}</span>
+          <span className="protocol-label">protocol 0.1</span>
+        </div>
+      </header>
+
+      {error && (
+        <div className="error-banner" role="alert">
+          <span>Runtime request failed</span>
+          <button
+            type="button"
+            onClick={() => queryClient.invalidateQueries()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      <main className="workspace">
+        <aside className="agent-panel" aria-labelledby="agents-title">
+          <div className="panel-heading">
+            <div>
+              <span className="section-kicker">Network</span>
+              <h1 id="agents-title">Agents</h1>
+            </div>
+            <span className="count-badge">{agents.length}</span>
+          </div>
+
+          <div className="agent-list">
+            {agentsQuery.isLoading ? (
+              <AgentSkeletons />
+            ) : agents.length ? (
+              agents.map((agent, index) => (
+                <article className="agent-row" key={agent.agentId}>
+                  <div className={`agent-avatar tone-${(index % 3) + 1}`}>
+                    {initials(agent.name)}
+                  </div>
+                  <div className="agent-copy">
+                    <strong>{agent.name}</strong>
+                    <span>{agent.framework ?? "custom"}</span>
+                  </div>
+                  <span
+                    className={`agent-state ${agent.active ? "online" : ""}`}
+                    aria-label={agent.active ? "online" : "offline"}
+                  />
+                </article>
+              ))
+            ) : (
+              <div className="empty-compact">
+                <UserGroupIcon />
+                <span>No agents online</span>
+              </div>
+            )}
+          </div>
+
+          <div className="rooms-block">
+            <span className="section-kicker">Rooms</span>
+            {rooms.length ? (
+              rooms.map((room) => (
+                <button
+                  className={`room-button ${
+                    room.roomId === selectedRoomId ? "selected" : ""
+                  }`}
+                  key={room.roomId}
+                  onClick={() => setSelectedRoomId(room.roomId)}
+                  type="button"
+                >
+                  <ChatBubbleLeftRightIcon />
+                  <span># {room.name}</span>
+                </button>
+              ))
+            ) : (
+              <span className="room-placeholder">No active rooms</span>
+            )}
+          </div>
+        </aside>
+
+        <section className="conversation-panel" id="conversation">
+          <header className="conversation-header">
+            <div>
+              <span className="section-kicker">Broadcast room</span>
+              <h2># {roomName(rooms, selectedRoomId)}</h2>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              title="Refresh messages"
+              aria-label="Refresh messages"
+              onClick={() => feedQuery.refetch()}
+            >
+              <ArrowPathIcon className={feedQuery.isFetching ? "spinning" : ""} />
+            </button>
+          </header>
+
+          <div className="message-stream" aria-live="polite">
+            {feedQuery.isLoading ? (
+              <MessageSkeletons />
+            ) : feed?.messages.length ? (
+              feed.messages.map((message, index) => (
+                <MessageRow
+                  key={message.messageId}
+                  message={message}
+                  agent={agents.find(
+                    (agent) => agent.agentId === message.senderAgentId,
+                  )}
+                  isLatest={index === feed.messages.length - 1}
+                />
+              ))
+            ) : (
+              <div className="empty-conversation">
+                <div className="empty-signal">
+                  <SignalIcon />
+                </div>
+                <h3>Room is quiet</h3>
+                <span>0 messages · 0 active discussions</span>
+              </div>
+            )}
+          </div>
+
+          <form className="composer" onSubmit={submit}>
+            <div className="composer-input">
+              <label htmlFor="broadcast-message">Broadcast message</label>
+              <textarea
+                id="broadcast-message"
+                maxLength={20_000}
+                onChange={(event) => setPrompt(event.target.value)}
+                rows={2}
+                value={prompt}
+              />
+            </div>
+            <button
+              className="broadcast-button"
+              disabled={!prompt.trim() || broadcast.isPending}
+              type="submit"
+            >
+              {broadcast.isPending ? <ArrowPathIcon className="spinning" /> : <PaperAirplaneIcon />}
+              <span>{broadcast.isPending ? "Broadcasting" : "Broadcast"}</span>
+            </button>
+          </form>
+        </section>
+
+        <aside className="inspector-panel" aria-labelledby="run-title">
+          <div className="panel-heading inspector-heading">
+            <div>
+              <span className="section-kicker">Discussion</span>
+              <h2 id="run-title">Run state</h2>
+            </div>
+            <BoltIcon />
+          </div>
+
+          <div className="run-status">
+            <span className={`status-block status-${feed?.discussion.status ?? "idle"}`}>
+              {formatStatus(feed?.discussion.status)}
+            </span>
+            <span className="run-id">
+              {feed ? shortId(feed.discussion.discussionId) : "no run"}
+            </span>
+          </div>
+
+          <dl className="run-metrics">
+            <Metric
+              label="Messages"
+              value={`${feed?.discussion.messageCount ?? 0} / ${
+                feed?.discussion.maxMessages ?? 30
+              }`}
+            />
+            <Metric label="Agents" value={String(agents.length)} />
+            <Metric
+              label="Window"
+              value={feed ? timeRemaining(feed.discussion.expiresAt) : "05:00"}
+            />
+            <Metric label="Delivery" value="at least once" />
+          </dl>
+
+          <div className="quota-track" aria-label="Discussion message quota">
+            <span
+              style={{
+                transform: `scaleX(${Math.min(
+                  (feed?.discussion.messageCount ?? 0) /
+                    (feed?.discussion.maxMessages ?? 30),
+                  1,
+                )})`,
+              }}
+            />
+          </div>
+
+          <div className="event-legend">
+            <span><i className="legend-seed" />Seed</span>
+            <span><i className="legend-agent" />Agent reply</span>
+            <span><i className="legend-live" />Live edge</span>
+          </div>
+
+          <button
+            className="stop-button"
+            disabled={!isLive || stopDiscussion.isPending}
+            onClick={() =>
+              feed && stopDiscussion.mutate(feed.discussion.discussionId)
+            }
+            type="button"
+          >
+            <StopIcon />
+            <span>Stop discussion</span>
+          </button>
+        </aside>
+      </main>
+    </div>
+  );
+}
+
+function MessageRow({
+  message,
+  agent,
+  isLatest,
+}: {
+  message: Message;
+  agent?: Agent;
+  isLatest: boolean;
+}) {
+  const isSeed = message.senderAgentId === "user";
+  const name = isSeed ? "Room trigger" : agent?.name ?? message.senderAgentId;
+  return (
+    <article className={`message-row ${isSeed ? "seed-message" : ""}`}>
+      <div className="sequence-column">
+        <span className="sequence-number">{String(message.sequence).padStart(2, "0")}</span>
+        <span className={`timeline-node ${isLatest ? "latest" : ""}`} />
       </div>
+      <div className="message-body">
+        <header>
+          <strong>{name}</strong>
+          <span>{isSeed ? "seed" : agent?.framework ?? "agent"}</span>
+          <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+        </header>
+        <p>{message.content}</p>
+        <footer>
+          <span>{shortId(message.messageId)}</span>
+          <span>delivered</span>
+        </footer>
+      </div>
+    </article>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function AgentSkeletons() {
+  return (
+    <>
+      {[0, 1, 2].map((item) => (
+        <div className="agent-skeleton" key={item}>
+          <span />
+          <i />
+        </div>
+      ))}
     </>
   );
 }
 
-const SiteList: FC<{ client: Client }> = ({ client }) => {
-  const { isLoading, error, data } = useQuery({
-    queryKey: ["sites"],
-    queryFn: () => client.site.list(),
-    refetchInterval: 10000, // 10s
-    retry: false,
-  });
-
-  const { data: status } = useQuery({
-    queryKey: ["status"],
-    queryFn: () => client.monitor.status(),
-    refetchInterval: 1000, // every second
-    retry: false,
-  });
-
-  const queryClient = useQueryClient();
-
-  const doDelete = useMutation({
-    mutationFn: (site: site.Site) => {
-      return client.site.del(site.id);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["sites"] });
-    },
-  });
-
-  if (isLoading) {
-    return <div>Loading...</div>;
-  } else if (error) {
-    return <div className="text-red-600">{(error as Error).message}</div>;
-  }
-
-  const now = DateTime.now();
+function MessageSkeletons() {
   return (
-    <>
-      <div className="sm:flex sm:items-center">
-        <div className="sm:flex-auto">
-          <h1 className="text-xl font-semibold text-gray-900">
-            Monitored Websites
-          </h1>
-          <p className="mt-2 text-sm text-gray-700">
-            A list of all the websites being monitored, their current status,
-            and when they were last checked.
-          </p>
+    <div className="message-skeletons">
+      {[0, 1, 2].map((item) => (
+        <div key={item}>
+          <span />
+          <i />
         </div>
-        <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
-          <AddSiteForm client={client} />
-        </div>
-      </div>
-
-      <div className="mt-8 flex flex-col">
-        <div className="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
-          <div className="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-              <table className="min-w-full divide-y divide-gray-300">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th
-                      scope="col"
-                      className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
-                    >
-                      Site
-                    </th>
-                    <th
-                      scope="col"
-                      className="relative py-3.5 pl-3 pr-4 sm:pr-6"
-                    >
-                      <span className="sr-only"></span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {data?.sites.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={2}
-                        className={"text-center text-gray-400 py-8"}
-                      >
-                        Nothing to monitor yet. Add a website to see it here.
-                      </td>
-                    </tr>
-                  )}
-                  {data!.sites.map((site) => {
-                    const st = status?.sites.find((s) => s.id === site.id);
-                    const dt = st && DateTime.fromISO(st.checkedAt);
-                    return (
-                      <tr key={site.id}>
-                        <td className="px-3 py-4 text-sm">
-                          <div className="flex items-center gap-2">
-                            <span className="text-gray-700">{site.url}</span>
-                            <StatusBadge status={st} />
-                          </div>
-                          {dt && (
-                            <div className="text-gray-400">
-                              Last checked <TimeDelta dt={dt} />
-                            </div>
-                          )}
-                        </td>
-                        <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                          <button
-                            className="text-indigo-600 hover:text-indigo-900"
-                            onClick={() => doDelete.mutate(site)}
-                          >
-                            Delete<span className="sr-only"> {site.url}</span>
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+      ))}
+    </div>
   );
-};
+}
 
-const AddSiteForm: FC<{ client: Client }> = ({ client }) => {
-  const [formOpen, setFormOpen] = useState(false);
-  const [url, setUrl] = useState("");
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
 
-  const queryClient = useQueryClient();
+function shortId(value: string): string {
+  return value.slice(0, 8);
+}
 
-  const save = useMutation({
-    mutationFn: async (url: string) => {
-      if (!validURL(url)) {
-        return;
-      }
+function roomName(rooms: Room[], roomId: string): string {
+  return rooms.find((room) => room.roomId === roomId)?.name ?? "Demo Lobby";
+}
 
-      await client.site.add({ url });
-      setFormOpen(false);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["sites"] });
-      queryClient.invalidateQueries({ queryKey: ["status"] });
-    },
-  });
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
 
-  const onSubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    save.mutate(url);
-  };
+function formatStatus(status?: Discussion["status"]): string {
+  return status?.replace("_", " ") ?? "idle";
+}
 
-  if (!formOpen) {
-    return (
-      <button
-        type="button"
-        className="inline-flex items-center justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:w-auto"
-        onClick={() => setFormOpen(true)}
-      >
-        Add website
-      </button>
-    );
-  }
-
-  return (
-    <form onSubmit={onSubmit}>
-      <div className="flex flex-col md:flex-row md:items-end gap-4">
-        <div>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="google.com"
-            className="mt-1 block w-full rounded-md border-gray-300 p-2 border shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-          />
-        </div>
-
-        <div>
-          <button
-            type="submit"
-            className="inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm enabled:hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-75"
-            disabled={!validURL(url)}
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </form>
-  );
-};
-
-export default App;
-
-const validURL = (url: string) => {
-  const idx = url.lastIndexOf(".");
-  if (idx === -1 || url.substring(idx + 1) === "") {
-    return false;
-  }
-
-  if (!url.startsWith("http:") && !url.startsWith("https:")) {
-    url = "https://" + url;
-  }
-
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch (_) {
-    return false;
-  }
-};
-
-const StatusBadge: FC<{ status: monitor.SiteStatus | undefined }> = ({
-  status,
-}) => {
-  const up = status?.up;
-  return up ? (
-    <Badge color="green">Up</Badge>
-  ) : up === false ? (
-    <Badge color="red">Down</Badge>
-  ) : (
-    <Badge color="gray">Unknown</Badge>
-  );
-};
-
-const Badge: FC<{
-  color: "green" | "red" | "orange" | "gray";
-  children?: React.ReactNode;
-}> = ({ color, children }) => {
-  const [bgColor, textColor] = {
-    green: ["bg-green-100", "text-green-800"],
-    red: ["bg-red-100", "text-red-800"],
-    orange: ["bg-orange-100", "text-orange-800"],
-    gray: ["bg-gray-100", "text-gray-800"],
-  }[color]!;
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-md px-2.5 py-0.5 text-sm font-medium uppercase ${bgColor} ${textColor}`}
-    >
-      {children}
-    </span>
-  );
-};
-
-const TimeDelta: FC<{ dt: DateTime }> = ({ dt }) => {
-  const compute = () => dt.toRelative();
-  const [str, setStr] = useState(compute());
-
-  useEffect(() => {
-    const handler = () => setStr(compute());
-    const timer = setInterval(handler, 1000);
-    return () => clearInterval(timer);
-  }, [dt]);
-
-  return <>{str}</>;
-};
+function timeRemaining(expiresAt: string): string {
+  const milliseconds = Math.max(new Date(expiresAt).getTime() - Date.now(), 0);
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
