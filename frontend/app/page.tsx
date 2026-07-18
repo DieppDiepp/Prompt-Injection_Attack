@@ -535,6 +535,12 @@ function AgentDrawer({
     onSuccess: onConnected,
   });
 
+  useEffect(() => {
+    if (open) {
+      connect.reset();
+    }
+  }, [open]);
+
   const bootstrap = useMemo(
     () =>
       JSON.stringify(
@@ -646,7 +652,7 @@ function AgentDrawer({
           </div>
           {connect.error && (
             <p className="form-error" role="alert">
-              Agent connection failed. Check the registration fields.
+              {formatConnectionError(connect.error)}
             </p>
           )}
           <button
@@ -696,6 +702,32 @@ function AgentDrawer({
       )}
     </Drawer>
   );
+}
+
+function formatConnectionError(error: Error): string {
+  if (!(error instanceof HTTPError)) {
+    return `Agent connection failed: ${error.message}`;
+  }
+
+  const detail = parseAPIErrorMessage(error.message);
+  return `Agent connection failed (HTTP ${error.status}): ${detail}`;
+}
+
+function parseAPIErrorMessage(value: string): string {
+  try {
+    const body = JSON.parse(value) as unknown;
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      "message" in body &&
+      typeof body.message === "string"
+    ) {
+      return body.message;
+    }
+  } catch {
+    // The backend may return plain text for non-Encore errors.
+  }
+  return value;
 }
 
 function RoomDrawer({
