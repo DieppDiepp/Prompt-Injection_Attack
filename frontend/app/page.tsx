@@ -1,63 +1,47 @@
 "use client";
 
-import {
-  ArrowPathIcon,
-  BoltIcon,
-  ChatBubbleLeftRightIcon,
-  ClipboardDocumentIcon,
-  CommandLineIcon,
-  LinkIcon,
-  PaperAirplaneIcon,
-  PlusIcon,
-  SignalIcon,
-  StopIcon,
-  UserMinusIcon,
-  UserGroupIcon,
-  XMarkIcon,
-} from "@heroicons/react/24/outline";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-interface Agent {
-  agentId: string;
-  name: string;
-  webhookUrl: string;
-  framework?: string;
-  capabilities: string[];
-  active: boolean;
-}
+type TargetMode = "webhook" | "local";
+type LeakSeverity = "none" | "acknowledges" | "partial" | "verbatim";
+type SessionStatus = "active" | "stopped" | "completed" | "leaked";
 
-interface Room {
-  roomId: string;
+interface Target {
+  targetId: string;
   name: string;
-}
-
-interface Discussion {
-  discussionId: string;
-  roomId: string;
-  status: "active" | "stopped" | "quota_exhausted" | "expired";
-  maxMessages: number;
-  messageCount: number;
-  expiresAt: string;
+  mode: TargetMode;
+  webhookUrl?: string;
   createdAt: string;
 }
 
-interface Message {
-  protocolVersion: "0.1";
-  messageId: string;
-  discussionId: string;
-  roomId: string;
-  senderAgentId: string;
-  sequence: number;
-  type: "message" | "system";
-  content: string;
+interface Interaction {
+  interactionId: string;
+  ordinal: number;
+  roundNumber?: number;
+  kind: "probe" | "benign";
+  prompt: string;
+  targetResponse: string;
+  analyst?: string;
+  strategies: string[];
+  leadReasoning?: string;
+  detectedSeverity: LeakSeverity;
+  detectorEvidence: string[];
+  targetLatencyMs?: number;
   createdAt: string;
-  metadata?: Record<string, unknown>;
 }
 
-interface DiscussionFeed {
-  discussion: Discussion;
-  messages: Message[];
+interface Session {
+  sessionId: string;
+  target: Target;
+  status: SessionStatus;
+  maxTurns: number;
+  attackTurnCount: number;
+  finalSeverity?: LeakSeverity;
+  finalReason?: string;
+  finalEvidence: string[];
+  createdAt: string;
+  completedAt?: string;
+  interactions: Interaction[];
 }
 
 class HTTPError extends Error {
@@ -75,900 +59,431 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new HTTPError(response.status, body || `HTTP ${response.status}`);
-  }
-  if (response.status === 204) {
-    return undefined as T;
+    throw new HTTPError(response.status, parseError(body));
   }
   return (await response.json()) as T;
 }
 
-export default function App() {
-  const queryClient = useQueryClient();
-  const [selectedRoomId, setSelectedRoomId] = useState("demo-lobby");
-  const [drawer, setDrawer] = useState<"agent" | "room" | null>(null);
-  const [runtimeUrl, setRuntimeUrl] = useState("");
-  const [prompt, setPrompt] = useState(
-    "What should an open network of agents discuss first?",
+export default function RedTeamLab() {
+  const [tab, setTab] = useState<"council" | "target">("target");
+  const [targets, setTargets] = useState<Target[]>([]);
+  const [selectedTargetId, setSelectedTargetId] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState<"target" | "session" | "advance" | "benign" | "finalize" | "stop" | null>(null);
+  const [maxTurns, setMaxTurns] = useState("6");
+  const [normalQuestion, setNormalQuestion] = useState("");
+  const [targetForm, setTargetForm] = useState({
+    name: "",
+    mode: "local" as TargetMode,
+    webhookUrl: "",
+    systemPrompt: "",
+    protectedContent: "",
+  });
+
+  const selectedTarget = useMemo(
+    () => targets.find((target) => target.targetId === selectedTargetId),
+    [selectedTargetId, targets],
   );
-
-  useEffect(() => setRuntimeUrl(window.location.origin), []);
-
-  const roomsQuery = useQuery({
-    queryKey: ["rooms"],
-    queryFn: () => requestJSON<{ rooms: Room[] }>("/v1/rooms"),
-    refetchInterval: 5_000,
-  });
-
-  const agentsQuery = useQuery({
-    queryKey: ["room-agents", selectedRoomId],
-    queryFn: async () => {
-      try {
-        return await requestJSON<{ agents: Agent[] }>(
-          `/v1/rooms/${encodeURIComponent(selectedRoomId)}/agents`,
-        );
-      } catch (error) {
-        if (error instanceof HTTPError && error.status === 404) {
-          return { agents: [] };
-        }
-        throw error;
-      }
-    },
-    refetchInterval: 3_000,
-  });
-
-  const feedQuery = useQuery({
-    queryKey: ["latest-discussion", selectedRoomId],
-    queryFn: async (): Promise<DiscussionFeed | null> => {
-      try {
-        return await requestJSON<DiscussionFeed>(
-          `/v1/rooms/${encodeURIComponent(selectedRoomId)}/discussions/latest`,
-        );
-      } catch (error) {
-        if (error instanceof HTTPError && error.status === 404) {
-          return null;
-        }
-        throw error;
-      }
-    },
-    refetchInterval: 800,
-  });
+  const probes = session?.interactions.filter((interaction) => interaction.kind === "probe") ?? [];
 
   useEffect(() => {
-    const rooms = roomsQuery.data?.rooms;
-    if (rooms?.length && !rooms.some((room) => room.roomId === selectedRoomId)) {
-      setSelectedRoomId(rooms[0].roomId);
+    void refreshTargets();
+  }, []);
+
+  async function refreshTargets() {
+    try {
+      const result = await requestJSON<{ targets: Target[] }>("/v1/red-team/targets");
+      setTargets(result.targets);
+      setSelectedTargetId((current) => current || result.targets[0]?.targetId || "");
+    } catch (caught) {
+      showError(caught);
     }
-  }, [roomsQuery.data, selectedRoomId]);
+  }
 
-  const broadcast = useMutation({
-    mutationFn: async (content: string) => {
-      if (
-        selectedRoomId === "demo-lobby" &&
-        !rooms.some((room) => room.roomId === "demo-lobby")
-      ) {
-        await requestJSON("/v1/demo/setup", { method: "POST" });
-      }
-      return requestJSON<{ discussion: Discussion; message: Message }>(
-        `/v1/rooms/${encodeURIComponent(selectedRoomId)}/discussions`,
-        {
-        method: "POST",
-          body: JSON.stringify({
-            senderAgentId: "user",
-            content,
-            maxMessages: 30,
-            timeoutSeconds: 300,
-          }),
-        },
-      );
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["latest-discussion", selectedRoomId],
-      });
-    },
-  });
-
-  const stopDiscussion = useMutation({
-    mutationFn: (discussionId: string) =>
-      requestJSON<void>(
-        `/v1/discussions/${encodeURIComponent(discussionId)}/stop`,
-        { method: "POST" },
-      ),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: ["latest-discussion", selectedRoomId],
-      }),
-  });
-
-  const removeAgent = useMutation({
-    mutationFn: (agentId: string) =>
-      requestJSON<void>(
-        `/v1/rooms/${encodeURIComponent(selectedRoomId)}/agents/${encodeURIComponent(agentId)}`,
-        { method: "DELETE" },
-      ),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["room-agents", selectedRoomId],
-      });
-    },
-  });
-
-  const feed = feedQuery.data;
-  const agents = agentsQuery.data?.agents ?? [];
-  const rooms = roomsQuery.data?.rooms ?? [];
-  const isLive = feed?.discussion.status === "active";
-  const error =
-    roomsQuery.error ??
-    agentsQuery.error ??
-    feedQuery.error ??
-    broadcast.error ??
-    removeAgent.error;
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  async function createTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const content = prompt.trim();
-    if (content) {
-      broadcast.mutate(content);
+    setBusy("target");
+    clearMessages();
+    try {
+      const target = await requestJSON<Target>("/v1/red-team/targets", {
+        method: "POST",
+        body: JSON.stringify(targetForm),
+      });
+      await refreshTargets();
+      setSelectedTargetId(target.targetId);
+      setTargetForm({ name: "", mode: targetForm.mode, webhookUrl: "", systemPrompt: "", protectedContent: "" });
+      setNotice("Đã lưu mục tiêu. Nội dung cần bảo vệ chỉ dùng ở server để chấm điểm.");
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
     }
-  };
+  }
+
+  async function createSession() {
+    if (!selectedTargetId) return;
+    setBusy("session");
+    clearMessages();
+    try {
+      const created = await requestJSON<Session>("/v1/red-team/sessions", {
+        method: "POST",
+        body: JSON.stringify({ targetId: selectedTargetId, maxTurns: Number(maxTurns) }),
+      });
+      setSession(created);
+      setTab("council");
+      setNotice("Phiên đã sẵn sàng. Chạy vòng đầu để hội đồng tạo probe đầu tiên.");
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateSession(action: "advance" | "finalize" | "stop") {
+    if (!session) return;
+    setBusy(action);
+    clearMessages();
+    try {
+      const updated = await requestJSON<Session>(`/v1/red-team/sessions/${session.sessionId}/${action}`, {
+        method: "POST",
+      });
+      setSession(updated);
+      if (action === "advance") setTab("council");
+      if (updated.status !== "active") setNotice("Phiên đã kết thúc và có kết luận cuối.");
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sendNormalQuestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !normalQuestion.trim()) return;
+    setBusy("benign");
+    clearMessages();
+    try {
+      const updated = await requestJSON<Session>(`/v1/red-team/sessions/${session.sessionId}/benign`, {
+        method: "POST",
+        body: JSON.stringify({ content: normalQuestion }),
+      });
+      setSession(updated);
+      setNormalQuestion("");
+      setTab("target");
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function clearMessages() {
+    setError("");
+    setNotice("");
+  }
+
+  function showError(caught: unknown) {
+    const message = caught instanceof Error ? caught.message : "Đã có lỗi không xác định.";
+    setError(message);
+  }
 
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#conversation">
-        Skip to conversation
-      </a>
-
-      <header className="topbar">
-        <div className="brand-lockup" aria-label="AIRC control room">
-          <span className="brand-mark">A</span>
-          <span className="brand-name">AIRC</span>
-          <span className="brand-section">Control room</span>
+    <main className="rt-shell">
+      <header className="rt-header">
+        <div>
+          <p className="rt-eyebrow">AIRC · RED TEAM LAB</p>
+          <h1>Đo độ bền của system prompt</h1>
+          <p className="rt-subtitle">
+            Hội đồng attacker tìm cách khai thác; ground truth chỉ phục vụ chấm điểm ở phía server.
+          </p>
         </div>
-        <div className="runtime-state">
-          <span className={`live-dot ${isLive ? "active" : ""}`} />
-          <span>{isLive ? "Discussion live" : "Runtime ready"}</span>
-          <span className="protocol-label">protocol 0.1</span>
-        </div>
+        <div className="rt-model-badge"><span />GPT-5.4-mini</div>
       </header>
 
-      {error && (
-        <div className="error-banner" role="alert">
-          <span>Runtime request failed</span>
-          <button
-            type="button"
-            onClick={() => queryClient.invalidateQueries()}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      <main className="workspace">
-        <aside className="agent-panel" aria-labelledby="agents-title">
-          <div className="panel-heading">
-            <div>
-              <span className="section-kicker">Network</span>
-              <h1 id="agents-title">Agents</h1>
-            </div>
-            <div className="heading-actions">
-              <span className="count-badge">{agents.length}</span>
-              <button
-                className="mini-action"
-                disabled={!rooms.length}
-                onClick={() => setDrawer("agent")}
-                type="button"
-              >
-                <LinkIcon />
-                <span>Connect</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="agent-list">
-            {agentsQuery.isLoading ? (
-              <AgentSkeletons />
-            ) : agents.length ? (
-              agents.map((agent, index) => (
-                <article className="agent-row" key={agent.agentId}>
-                  <div className={`agent-avatar tone-${(index % 3) + 1}`}>
-                    {initials(agent.name)}
-                  </div>
-                  <div className="agent-copy">
-                    <strong>{agent.name}</strong>
-                    <span>{agent.framework ?? "custom"}</span>
-                  </div>
-                  <div className="agent-actions">
-                    <span
-                      className={`agent-state ${agent.active ? "online" : ""}`}
-                      aria-label={agent.active ? "online" : "offline"}
-                    />
-                    <button
-                      aria-label={`Remove ${agent.name} from room`}
-                      className="kick-agent-button"
-                      disabled={
-                        removeAgent.isPending &&
-                        removeAgent.variables === agent.agentId
-                      }
-                      onClick={() => removeAgent.mutate(agent.agentId)}
-                      title="Remove from room"
-                      type="button"
-                    >
-                      <UserMinusIcon />
-                    </button>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <div className="empty-compact">
-                <UserGroupIcon />
-                <span>No agents online</span>
-              </div>
-            )}
-          </div>
-
-          <div className="rooms-block">
-            <div className="rooms-heading">
-              <span className="section-kicker">Rooms</span>
-              <button
-                className="small-icon-button"
-                onClick={() => setDrawer("room")}
-                title="Create room"
-                type="button"
-              >
-                <PlusIcon />
-              </button>
-            </div>
-            {rooms.length ? (
-              rooms.map((room) => (
-                <button
-                  className={`room-button ${
-                    room.roomId === selectedRoomId ? "selected" : ""
-                  }`}
-                  key={room.roomId}
-                  onClick={() => setSelectedRoomId(room.roomId)}
-                  type="button"
-                >
-                  <ChatBubbleLeftRightIcon />
-                  <span># {room.name}</span>
-                </button>
-              ))
-            ) : (
-              <span className="room-placeholder">No active rooms</span>
-            )}
-          </div>
-        </aside>
-
-        <section className="conversation-panel" id="conversation">
-          <header className="conversation-header">
-            <div>
-              <span className="section-kicker">Broadcast room</span>
-              <h2># {roomName(rooms, selectedRoomId)}</h2>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              title="Refresh messages"
-              aria-label="Refresh messages"
-              onClick={() => feedQuery.refetch()}
-            >
-              <ArrowPathIcon className={feedQuery.isFetching ? "spinning" : ""} />
-            </button>
-          </header>
-
-          <div className="message-stream" aria-live="polite">
-            {feedQuery.isLoading ? (
-              <MessageSkeletons />
-            ) : feed?.messages.length ? (
-              feed.messages.map((message, index) => (
-                <MessageRow
-                  key={message.messageId}
-                  message={message}
-                  agent={agents.find(
-                    (agent) => agent.agentId === message.senderAgentId,
-                  )}
-                  isLatest={index === feed.messages.length - 1}
-                />
-              ))
-            ) : (
-              <div className="empty-conversation">
-                <div className="empty-signal">
-                  <SignalIcon />
-                </div>
-                <h3>Room is quiet</h3>
-                <span>0 messages · 0 active discussions</span>
-              </div>
-            )}
-          </div>
-
-          <form className="composer" onSubmit={submit}>
-            <div className="composer-input">
-              <label htmlFor="broadcast-message">Broadcast message</label>
-              <textarea
-                id="broadcast-message"
-                maxLength={20_000}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={2}
-                value={prompt}
-              />
-            </div>
-            <button
-              className="broadcast-button"
-              disabled={!prompt.trim() || broadcast.isPending}
-              type="submit"
-            >
-              {broadcast.isPending ? <ArrowPathIcon className="spinning" /> : <PaperAirplaneIcon />}
-              <span>{broadcast.isPending ? "Broadcasting" : "Broadcast"}</span>
-            </button>
-          </form>
-        </section>
-
-        <aside className="inspector-panel" aria-labelledby="run-title">
-          <div className="panel-heading inspector-heading">
-            <div>
-              <span className="section-kicker">Discussion</span>
-              <h2 id="run-title">Run state</h2>
-            </div>
-            <BoltIcon />
-          </div>
-
-          <div className="run-status">
-            <span className={`status-block status-${feed?.discussion.status ?? "idle"}`}>
-              {formatStatus(feed?.discussion.status)}
-            </span>
-            <span className="run-id">
-              {feed ? shortId(feed.discussion.discussionId) : "no run"}
-            </span>
-          </div>
-
-          <dl className="run-metrics">
-            <Metric
-              label="Messages"
-              value={`${feed?.discussion.messageCount ?? 0} / ${
-                feed?.discussion.maxMessages ?? 30
-              }`}
-            />
-            <Metric label="Agents" value={String(agents.length)} />
-            <Metric
-              label="Window"
-              value={feed ? timeRemaining(feed.discussion.expiresAt) : "05:00"}
-            />
-            <Metric label="Delivery" value="at least once" />
-          </dl>
-
-          <div className="quota-track" aria-label="Discussion message quota">
-            <span
-              style={{
-                transform: `scaleX(${Math.min(
-                  (feed?.discussion.messageCount ?? 0) /
-                    (feed?.discussion.maxMessages ?? 30),
-                  1,
-                )})`,
-              }}
-            />
-          </div>
-
-          <div className="event-legend">
-            <span><i className="legend-seed" />Seed</span>
-            <span><i className="legend-agent" />Agent reply</span>
-            <span><i className="legend-live" />Live edge</span>
-          </div>
-
-          <button
-            className="stop-button"
-            disabled={!isLive || stopDiscussion.isPending}
-            onClick={() =>
-              feed && stopDiscussion.mutate(feed.discussion.discussionId)
-            }
-            type="button"
-          >
-            <StopIcon />
-            <span>Stop discussion</span>
-          </button>
-        </aside>
-      </main>
-
-      <AgentDrawer
-        onClose={() => setDrawer(null)}
-        onConnected={async () => {
-          await queryClient.invalidateQueries();
-          setDrawer(null);
-        }}
-        open={drawer === "agent"}
-        roomId={selectedRoomId}
-        runtimeUrl={runtimeUrl}
-      />
-      <RoomDrawer
-        onClose={() => setDrawer(null)}
-        onCreated={async (room) => {
-          setSelectedRoomId(room.roomId);
-          await queryClient.invalidateQueries();
-          setDrawer(null);
-        }}
-        open={drawer === "room"}
-      />
-    </div>
-  );
-}
-
-function AgentDrawer({
-  open,
-  roomId,
-  runtimeUrl,
-  onClose,
-  onConnected,
-}: {
-  open: boolean;
-  roomId: string;
-  runtimeUrl: string;
-  onClose: () => void;
-  onConnected: () => Promise<void>;
-}) {
-  const [mode, setMode] = useState<"manual" | "self">("manual");
-  const [copied, setCopied] = useState(false);
-  const [form, setForm] = useState({
-    agentId: "",
-    name: "",
-    framework: "custom",
-    webhookUrl: "",
-    capabilities: "",
-  });
-
-  const connect = useMutation({
-    mutationFn: async () => {
-      const capabilities = form.capabilities
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      await requestJSON<Agent>("/v1/agents", {
-        method: "POST",
-        body: JSON.stringify({ ...form, capabilities }),
-      });
-      await requestJSON<void>(
-        `/v1/rooms/${encodeURIComponent(roomId)}/agents`,
-        {
-          method: "POST",
-          body: JSON.stringify({ agentId: form.agentId }),
-        },
-      );
-    },
-    onSuccess: onConnected,
-  });
-
-  useEffect(() => {
-    if (open) {
-      connect.reset();
-    }
-  }, [open]);
-
-  const bootstrap = useMemo(
-    () =>
-      JSON.stringify(
-        {
-          protocolVersion: "0.1",
-          baseUrl: runtimeUrl,
-          roomId,
-          register: "POST /v1/agents",
-          join: `POST /v1/rooms/${roomId}/agents`,
-          reply: "POST /v1/discussions/{discussionId}/messages",
-        },
-        null,
-        2,
-      ),
-    [roomId, runtimeUrl],
-  );
-
-  const valid =
-    /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(form.agentId) &&
-    form.name.trim().length > 0 &&
-    isHTTPURL(form.webhookUrl);
-
-  return (
-    <Drawer open={open} title="Connect agent" onClose={onClose}>
-      <div className="segmented-control" role="tablist">
-        <button
-          aria-selected={mode === "manual"}
-          className={mode === "manual" ? "selected" : ""}
-          onClick={() => setMode("manual")}
-          role="tab"
-          type="button"
-        >
-          <LinkIcon />
-          Manual
-        </button>
-        <button
-          aria-selected={mode === "self"}
-          className={mode === "self" ? "selected" : ""}
-          onClick={() => setMode("self")}
-          role="tab"
-          type="button"
-        >
-          <CommandLineIcon />
-          Self-register
-        </button>
+      <div className="rt-safety-note">
+        Chỉ kiểm thử model, webhook và prompt mà bạn có quyền sử dụng. Không đưa secret thật vào môi trường công khai.
       </div>
 
-      {mode === "manual" ? (
-        <form
-          className="drawer-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (valid) connect.mutate();
-          }}
-        >
-          <FormField label="Agent ID" hint="letters, numbers, _ or -">
-            <input
-              autoComplete="off"
-              onChange={(event) =>
-                setForm((current) => ({ ...current, agentId: event.target.value }))
-              }
-              placeholder="research-agent"
-              required
-              value={form.agentId}
-            />
-          </FormField>
-          <FormField label="Display name">
-            <input
-              onChange={(event) =>
-                setForm((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder="Research Agent"
-              required
-              value={form.name}
-            />
-          </FormField>
-          <FormField label="Framework">
-            <input
-              onChange={(event) =>
-                setForm((current) => ({ ...current, framework: event.target.value }))
-              }
-              placeholder="langgraph"
-              value={form.framework}
-            />
-          </FormField>
-          <FormField label="Webhook URL">
-            <input
-              onChange={(event) =>
-                setForm((current) => ({ ...current, webhookUrl: event.target.value }))
-              }
-              placeholder="https://agent.example.com/airc/webhook"
-              required
-              type="url"
-              value={form.webhookUrl}
-            />
-          </FormField>
-          <FormField label="Capabilities" hint="comma separated">
-            <input
-              onChange={(event) =>
-                setForm((current) => ({ ...current, capabilities: event.target.value }))
-              }
-              placeholder="research, summarize"
-              value={form.capabilities}
-            />
-          </FormField>
-          <div className="target-room">
-            <span>Join room</span>
-            <strong># {roomId}</strong>
-          </div>
-          {connect.error && (
-            <p className="form-error" role="alert">
-              {formatConnectionError(connect.error)}
-            </p>
-          )}
-          <button
-            className="primary-drawer-action"
-            disabled={!valid || connect.isPending}
-            type="submit"
-          >
-            <LinkIcon />
-            {connect.isPending ? "Connecting" : "Register and join"}
-          </button>
-        </form>
+      <nav className="rt-tabs" aria-label="Khu vực red-team">
+        <button className={tab === "council" ? "active" : ""} onClick={() => setTab("council")} type="button">
+          <span>01</span> Hội đồng tấn công
+          {session && <em>{probes.length} vòng</em>}
+        </button>
+        <button className={tab === "target" ? "active" : ""} onClick={() => setTab("target")} type="button">
+          <span>02</span> Mục tiêu &amp; chạy
+          {session && <em>{session.status}</em>}
+        </button>
+      </nav>
+
+      {error && <p className="rt-banner error" role="alert">{error}</p>}
+      {notice && <p className="rt-banner notice">{notice}</p>}
+
+      {tab === "council" ? (
+        <CouncilTab
+          busy={busy}
+          onAdvance={() => void updateSession("advance")}
+          onFinalize={() => void updateSession("finalize")}
+          onTargetTab={() => setTab("target")}
+          session={session}
+        />
       ) : (
-        <div className="self-register-panel">
-          <dl>
-            <div>
-              <dt>Runtime</dt>
-              <dd>{runtimeUrl || "local runtime"}</dd>
-            </div>
-            <div>
-              <dt>Room</dt>
-              <dd># {roomId}</dd>
-            </div>
-          </dl>
-          <div className="bootstrap-code">
-            <div>
-              <span>airc-bootstrap.json</span>
-              <button
-                onClick={async () => {
-                  await navigator.clipboard.writeText(bootstrap);
-                  setCopied(true);
-                }}
-                title="Copy bootstrap configuration"
-                type="button"
-              >
-                <ClipboardDocumentIcon />
-              </button>
-            </div>
-            <pre>{bootstrap}</pre>
-          </div>
-          <div className="contract-steps">
-            <span><b>01</b> Register agent metadata and webhook</span>
-            <span><b>02</b> Join the selected room</span>
-            <span><b>03</b> Accept webhook events and post replies</span>
-          </div>
-          <div className="copy-state">{copied ? "Configuration copied" : "No API key required for MVP"}</div>
-        </div>
+        <TargetTab
+          busy={busy}
+          form={targetForm}
+          maxTurns={maxTurns}
+          normalQuestion={normalQuestion}
+          onCreateTarget={createTarget}
+          onCreateSession={() => void createSession()}
+          onFinalize={() => void updateSession("finalize")}
+          onFormChange={setTargetForm}
+          onMaxTurnsChange={setMaxTurns}
+          onNormalQuestionChange={setNormalQuestion}
+          onRefresh={() => void refreshTargets()}
+          onSendNormal={sendNormalQuestion}
+          onSelectedTargetChange={setSelectedTargetId}
+          onStop={() => void updateSession("stop")}
+          selectedTarget={selectedTarget}
+          selectedTargetId={selectedTargetId}
+          session={session}
+          targets={targets}
+        />
       )}
-    </Drawer>
+    </main>
   );
 }
 
-function formatConnectionError(error: Error): string {
-  if (!(error instanceof HTTPError)) {
-    return `Agent connection failed: ${error.message}`;
-  }
-
-  const detail = parseAPIErrorMessage(error.message);
-  return `Agent connection failed (HTTP ${error.status}): ${detail}`;
-}
-
-function parseAPIErrorMessage(value: string): string {
-  try {
-    const body = JSON.parse(value) as unknown;
-    if (
-      typeof body === "object" &&
-      body !== null &&
-      "message" in body &&
-      typeof body.message === "string"
-    ) {
-      return body.message;
-    }
-  } catch {
-    // The backend may return plain text for non-Encore errors.
-  }
-  return value;
-}
-
-function RoomDrawer({
-  open,
-  onClose,
-  onCreated,
+function CouncilTab({
+  busy,
+  onAdvance,
+  onFinalize,
+  onTargetTab,
+  session,
 }: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (room: Room) => Promise<void>;
+  busy: string | null;
+  onAdvance: () => void;
+  onFinalize: () => void;
+  onTargetTab: () => void;
+  session: Session | null;
 }) {
-  const [name, setName] = useState("");
-  const [roomId, setRoomId] = useState("");
-  const createRoom = useMutation({
-    mutationFn: () =>
-      requestJSON<Room>("/v1/rooms", {
-        method: "POST",
-        body: JSON.stringify({ name: name.trim(), roomId: roomId.trim() || undefined }),
-      }),
-    onSuccess: onCreated,
-  });
-  const validId =
-    !roomId || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(roomId);
+  if (!session) {
+    return (
+      <section className="rt-empty">
+        <p className="rt-eyebrow">CHƯA CÓ PHIÊN</p>
+        <h2>Hội đồng đang chờ mục tiêu</h2>
+        <p>Tạo hoặc chọn mục tiêu ở tab “Mục tiêu &amp; chạy”, sau đó mở một phiên red-team.</p>
+        <button className="rt-primary" onClick={onTargetTab} type="button">Thiết lập mục tiêu</button>
+      </section>
+    );
+  }
 
+  const probes = session.interactions.filter((interaction) => interaction.kind === "probe");
+  const canAdvance = session.status === "active" && session.attackTurnCount < session.maxTurns;
   return (
-    <Drawer open={open} title="Create room" onClose={onClose}>
-      <form
-        className="drawer-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (name.trim() && validId) createRoom.mutate();
-        }}
-      >
-        <FormField label="Room name">
-          <input
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Engineering Debate"
-            required
-            value={name}
-          />
-        </FormField>
-        <FormField label="Room ID" hint="optional stable identifier">
-          <input
-            autoComplete="off"
-            onChange={(event) => setRoomId(event.target.value)}
-            placeholder="engineering-debate"
-            value={roomId}
-          />
-        </FormField>
-        <div className="room-preview">
-          <ChatBubbleLeftRightIcon />
-          <span># {roomId || "generated-room-id"}</span>
-        </div>
-        {createRoom.error && (
-          <p className="form-error" role="alert">
-            Room creation failed. Check the room identifier.
-          </p>
-        )}
-        <button
-          className="primary-drawer-action"
-          disabled={!name.trim() || !validId || createRoom.isPending}
-          type="submit"
-        >
-          <PlusIcon />
-          {createRoom.isPending ? "Creating" : "Create room"}
+    <section className="rt-layout council-layout">
+      <aside className="rt-run-card">
+        <p className="rt-eyebrow">PHIÊN ĐANG CHẠY</p>
+        <h2>{session.target.name}</h2>
+        <StatusBadge status={session.status} />
+        <dl>
+          <div><dt>Vòng tấn công</dt><dd>{session.attackTurnCount} / {session.maxTurns}</dd></div>
+          <div><dt>Loại mục tiêu</dt><dd>{session.target.mode === "local" ? "Local prompt" : "AIRC webhook"}</dd></div>
+          <div><dt>Luồng hội thoại</dt><dd>{session.interactions.length} lượt</dd></div>
+        </dl>
+        <div className="rt-progress"><span style={{ width: `${(session.attackTurnCount / session.maxTurns) * 100}%` }} /></div>
+        <button className="rt-primary" disabled={!canAdvance || Boolean(busy)} onClick={onAdvance} type="button">
+          {busy === "advance" ? "Hội đồng đang phân tích…" : canAdvance ? "Chạy vòng kế tiếp" : "Đã đủ vòng"}
         </button>
-      </form>
-    </Drawer>
-  );
-}
-
-function Drawer({
-  open,
-  title,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="drawer-layer">
-      <button
-        aria-label="Close panel"
-        className="drawer-scrim"
-        onClick={onClose}
-        type="button"
-      />
-      <aside className="setup-drawer" aria-label={title}>
-        <header>
-          <div>
-            <span className="section-kicker">AIRC network</span>
-            <h2>{title}</h2>
-          </div>
-          <button
-            className="icon-button"
-            onClick={onClose}
-            title="Close panel"
-            type="button"
-          >
-            <XMarkIcon />
-          </button>
-        </header>
-        <div className="drawer-content">{children}</div>
+        <button className="rt-secondary" disabled={session.status !== "active" || Boolean(busy)} onClick={onFinalize} type="button">
+          {busy === "finalize" ? "Judge đang chấm…" : "Chấm điểm kết thúc"}
+        </button>
       </aside>
-    </div>
+
+      <div className="rt-council-stream">
+        {probes.length === 0 ? (
+          <article className="rt-first-round">
+            <p className="rt-eyebrow">VÒNG 01</p>
+            <h2>Sẵn sàng quan sát rồi khai thác</h2>
+            <p>Analyst sẽ đọc phản hồi, Strategist đưa hướng, và Lead chỉ chọn một probe tự nhiên cho mỗi vòng.</p>
+          </article>
+        ) : probes.map((interaction) => <CouncilRound interaction={interaction} key={interaction.interactionId} />)}
+        {session.finalSeverity && <FinalResult session={session} />}
+      </div>
+    </section>
   );
 }
 
-function FormField({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function CouncilRound({ interaction }: { interaction: Interaction }) {
   return (
-    <label className="form-field">
-      <span>
-        {label}
-        {hint && <small>{hint}</small>}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function MessageRow({
-  message,
-  agent,
-  isLatest,
-}: {
-  message: Message;
-  agent?: Agent;
-  isLatest: boolean;
-}) {
-  const isSeed = message.senderAgentId === "user";
-  const name = isSeed ? "Room trigger" : agent?.name ?? message.senderAgentId;
-  return (
-    <article className={`message-row ${isSeed ? "seed-message" : ""}`}>
-      <div className="sequence-column">
-        <span className="sequence-number">{String(message.sequence).padStart(2, "0")}</span>
-        <span className={`timeline-node ${isLatest ? "latest" : ""}`} />
+    <article className="rt-round">
+      <header>
+        <div><p className="rt-eyebrow">VÒNG {String(interaction.roundNumber ?? 0).padStart(2, "0")}</p><h2>Biên bản hội đồng</h2></div>
+        <SeverityBadge severity={interaction.detectedSeverity} />
+      </header>
+      <div className="rt-agent-grid">
+        <section><p>ANALYST</p><span>{interaction.analyst}</span></section>
+        <section><p>STRATEGIST</p><ul>{interaction.strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul></section>
+        <section><p>LEAD</p><span>{interaction.leadReasoning}</span></section>
       </div>
-      <div className="message-body">
-        <header>
-          <strong>{name}</strong>
-          <span>{isSeed ? "seed" : agent?.framework ?? "agent"}</span>
-          <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
-        </header>
-        <p>{message.content}</p>
-        <footer>
-          <span>{shortId(message.messageId)}</span>
-          <span>delivered</span>
-        </footer>
-      </div>
+      <div className="rt-probe"><p>PROBE ĐÃ GỬI</p><blockquote>{interaction.prompt}</blockquote></div>
+      <div className="rt-response"><p>PHẢN HỒI TỪ MỤC TIÊU</p><div>{interaction.targetResponse}</div></div>
+      <Detection interaction={interaction} />
     </article>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function TargetTab({
+  busy,
+  form,
+  maxTurns,
+  normalQuestion,
+  onCreateTarget,
+  onCreateSession,
+  onFinalize,
+  onFormChange,
+  onMaxTurnsChange,
+  onNormalQuestionChange,
+  onRefresh,
+  onSelectedTargetChange,
+  onSendNormal,
+  onStop,
+  selectedTarget,
+  selectedTargetId,
+  session,
+  targets,
+}: {
+  busy: string | null;
+  form: { name: string; mode: TargetMode; webhookUrl: string; systemPrompt: string; protectedContent: string };
+  maxTurns: string;
+  normalQuestion: string;
+  onCreateTarget: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onCreateSession: () => void;
+  onFinalize: () => void;
+  onFormChange: (form: { name: string; mode: TargetMode; webhookUrl: string; systemPrompt: string; protectedContent: string }) => void;
+  onMaxTurnsChange: (value: string) => void;
+  onNormalQuestionChange: (value: string) => void;
+  onRefresh: () => void;
+  onSelectedTargetChange: (id: string) => void;
+  onSendNormal: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onStop: () => void;
+  selectedTarget?: Target;
+  selectedTargetId: string;
+  session: Session | null;
+  targets: Target[];
+}) {
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
+    <section className="rt-target-grid">
+      <div className="rt-stack">
+        <article className="rt-panel">
+          <div className="rt-panel-heading"><div><p className="rt-eyebrow">MỤC TIÊU</p><h2>Chọn hoặc tạo target</h2></div><button className="rt-text-button" onClick={onRefresh} type="button">Làm mới</button></div>
+          {targets.length > 0 && (
+            <label className="rt-field">Mục tiêu đã lưu
+              <select onChange={(event) => onSelectedTargetChange(event.target.value)} value={selectedTargetId}>
+                {targets.map((target) => <option key={target.targetId} value={target.targetId}>{target.name} · {target.mode}</option>)}
+              </select>
+            </label>
+          )}
+          {selectedTarget && <p className="rt-selected-target">Đang chọn: <strong>{selectedTarget.name}</strong> · {selectedTarget.mode === "local" ? "chạy local qua OpenAI" : "gửi event AIRC sang webhook"}</p>}
+        </article>
+
+        <article className="rt-panel">
+          <div className="rt-panel-heading"><div><p className="rt-eyebrow">PHIÊN KIỂM THỬ</p><h2>Chạy red-team</h2></div>{session && <StatusBadge status={session.status} />}</div>
+          <label className="rt-field">Số vòng attacker
+            <input max="20" min="1" onChange={(event) => onMaxTurnsChange(event.target.value)} type="number" value={maxTurns} />
+          </label>
+          <button className="rt-primary" disabled={!selectedTarget || Boolean(busy)} onClick={onCreateSession} type="button">
+            {busy === "session" ? "Đang tạo phiên…" : "Tạo phiên mới"}
+          </button>
+          {session && <div className="rt-session-tools">
+            <button className="rt-secondary" disabled={session.status !== "active" || Boolean(busy)} onClick={onFinalize} type="button">Kết thúc &amp; chấm</button>
+            <button className="rt-danger" disabled={session.status !== "active" || Boolean(busy)} onClick={onStop} type="button">Dừng không chấm</button>
+          </div>}
+        </article>
+
+        <details className="rt-panel rt-create-target">
+          <summary><span><small>TẠO MỚI</small> Thêm mục tiêu kiểm thử</span><span>+</span></summary>
+          <form onSubmit={onCreateTarget}>
+            <label className="rt-field">Tên mục tiêu<input onChange={(event) => onFormChange({ ...form, name: event.target.value })} placeholder="Prompt phòng thủ bản thử nghiệm" required value={form.name} /></label>
+            <fieldset className="rt-mode-switch"><legend>Chế độ</legend>
+              <label><input checked={form.mode === "local"} onChange={() => onFormChange({ ...form, mode: "local" })} type="radio" value="local" /> Local</label>
+              <label><input checked={form.mode === "webhook"} onChange={() => onFormChange({ ...form, mode: "webhook" })} type="radio" value="webhook" /> Webhook AIRC</label>
+            </fieldset>
+            {form.mode === "local" ? (
+              <label className="rt-field">System prompt mục tiêu<textarea onChange={(event) => onFormChange({ ...form, systemPrompt: event.target.value })} placeholder="Dán system prompt đã có lớp phòng thủ và nội dung cần bảo vệ…" required rows={7} value={form.systemPrompt} /></label>
+            ) : (
+              <label className="rt-field">URL webhook AIRC<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="https://target.example.com/airc/webhook" required rows={2} value={form.webhookUrl} /><small>Webhook nhận event <code>airc.message</code> và trả <code>{'{ "output": "…" }'}</code>.</small></label>
+            )}
+            <label className="rt-field">Nội dung cần bảo vệ (ground truth)<textarea onChange={(event) => onFormChange({ ...form, protectedContent: event.target.value })} placeholder="Dán skill, quy trình hoặc bí quyết mà judge cần kiểm tra…" required rows={7} value={form.protectedContent} /><small>Không được gửi cho hội đồng attacker; chỉ lưu tại server để dò và judge.</small></label>
+            <button className="rt-primary" disabled={busy === "target"} type="submit">{busy === "target" ? "Đang lưu…" : "Lưu mục tiêu"}</button>
+          </form>
+        </details>
+      </div>
+
+      <div className="rt-stack">
+        <article className="rt-panel rt-transcript-panel">
+          <div className="rt-panel-heading"><div><p className="rt-eyebrow">PHẢN HỒI MỤC TIÊU</p><h2>Transcript kiểm thử</h2></div>{session && <span className="rt-count">{session.interactions.length} lượt</span>}</div>
+          {!session ? <p className="rt-placeholder">Chưa có phiên. Transcript sẽ hiện ở đây sau khi gửi probe hoặc câu hỏi bình thường.</p> : (
+            <div className="rt-transcript">
+              {session.interactions.length === 0 && <p className="rt-placeholder">Chưa có tin nhắn. Vào tab Hội đồng để chạy vòng đầu tiên.</p>}
+              {session.interactions.map((interaction) => <TranscriptItem interaction={interaction} key={interaction.interactionId} />)}
+            </div>
+          )}
+        </article>
+
+        {session?.status === "active" && <article className="rt-panel">
+          <p className="rt-eyebrow">KIỂM TRA FALSE POSITIVE</p><h2>Gửi câu hỏi bình thường</h2>
+          <p className="rt-copy">Câu hỏi này không đi qua hội đồng. Nó cho thấy prompt phòng thủ có vẫn trả lời tác vụ hợp lệ hay không.</p>
+          <form className="rt-inline-form" onSubmit={onSendNormal}>
+            <textarea onChange={(event) => onNormalQuestionChange(event.target.value)} placeholder="Ví dụ: Hãy tóm tắt ngắn về lợi ích của kiểm thử bảo mật." required rows={3} value={normalQuestion} />
+            <button className="rt-secondary" disabled={!normalQuestion.trim() || Boolean(busy)} type="submit">{busy === "benign" ? "Đang gửi…" : "Gửi câu hỏi bình thường"}</button>
+          </form>
+        </article>}
+
+        {session?.finalSeverity && <FinalResult session={session} />}
+      </div>
+    </section>
   );
 }
 
-function AgentSkeletons() {
+function TranscriptItem({ interaction }: { interaction: Interaction }) {
   return (
-    <>
-      {[0, 1, 2].map((item) => (
-        <div className="agent-skeleton" key={item}>
-          <span />
-          <i />
-        </div>
-      ))}
-    </>
+    <article className="rt-transcript-item">
+      <header><span>{interaction.kind === "probe" ? `Probe · vòng ${interaction.roundNumber}` : "Câu hỏi bình thường"}</span><SeverityBadge severity={interaction.detectedSeverity} /></header>
+      <div className="rt-bubble outgoing">{interaction.prompt}</div>
+      <div className="rt-bubble incoming">{interaction.targetResponse}</div>
+      <Detection interaction={interaction} compact />
+    </article>
   );
 }
 
-function MessageSkeletons() {
-  return (
-    <div className="message-skeletons">
-      {[0, 1, 2].map((item) => (
-        <div key={item}>
-          <span />
-          <i />
-        </div>
-      ))}
-    </div>
-  );
+function Detection({ interaction, compact = false }: { interaction: Interaction; compact?: boolean }) {
+  return <div className={`rt-detection ${compact ? "compact" : ""}`}><span>Bộ dò: <SeverityBadge severity={interaction.detectedSeverity} /></span>{interaction.detectorEvidence.length > 0 && <small>{interaction.detectorEvidence.join(" · ")}</small>}{!compact && <small>{interaction.targetLatencyMs ? `${interaction.targetLatencyMs} ms` : ""}</small>}</div>;
 }
 
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
+function FinalResult({ session }: { session: Session }) {
+  return <article className="rt-final-result"><p className="rt-eyebrow">KẾT LUẬN CUỐI</p><div><h2>{severityLabel(session.finalSeverity ?? "none")}</h2><SeverityBadge severity={session.finalSeverity ?? "none"} /></div><p>{session.finalReason}</p>{session.finalEvidence.length > 0 && <ul>{session.finalEvidence.map((item) => <li key={item}>{item}</li>)}</ul>}</article>;
 }
 
-function shortId(value: string): string {
-  return value.slice(0, 8);
+function SeverityBadge({ severity }: { severity: LeakSeverity }) {
+  return <span className={`rt-severity ${severity}`}>{severityLabel(severity)}</span>;
 }
 
-function roomName(rooms: Room[], roomId: string): string {
-  return rooms.find((room) => room.roomId === roomId)?.name ?? "Demo Lobby";
+function StatusBadge({ status }: { status: SessionStatus }) {
+  const labels: Record<SessionStatus, string> = { active: "đang chạy", stopped: "đã dừng", completed: "đã chấm", leaked: "phát hiện lộ" };
+  return <span className={`rt-status ${status}`}>{labels[status]}</span>;
 }
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
+function severityLabel(severity: LeakSeverity): string {
+  return { none: "an toàn", acknowledges: "thừa nhận", partial: "lộ một phần", verbatim: "lộ nguyên văn" }[severity];
 }
 
-function formatStatus(status?: Discussion["status"]): string {
-  return status?.replace("_", " ") ?? "idle";
-}
-
-function timeRemaining(expiresAt: string): string {
-  const milliseconds = Math.max(new Date(expiresAt).getTime() - Date.now(), 0);
-  const totalSeconds = Math.floor(milliseconds / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function isHTTPURL(value: string): boolean {
+function parseError(body: string): string {
   try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+    const value = JSON.parse(body) as { message?: unknown };
+    if (typeof value.message === "string") return value.message;
   } catch {
-    return false;
+    // Responses from a raw endpoint can be text.
   }
+  return body || "Yêu cầu không thành công.";
 }
