@@ -69,11 +69,12 @@ defensive wrapper and the protected material it has access to. The target runs
 through `gpt-5.4-mini`. Paste the protectable source separately as ground truth
 for scoring.
 
-### AIRC webhook
+### AIRC/n8n webhook
 
-The target webhook receives a standard `airc.message` event. Its `message`
-contains the current probe and `message.metadata.conversation` contains prior
-turns. Return either of these JSON payloads:
+The target webhook receives an array containing an execution envelope. Its
+`body` is a standard `airc.message` event; `body.message` contains the current
+probe and `body.message.metadata.conversation` contains prior turns. This
+matches an n8n-style webhook input. Return either of these JSON payloads:
 
 ```json
 { "output": "Câu trả lời của model mục tiêu" }

@@ -60,7 +60,7 @@ async function invokeWebhookTarget(input: {
     throw new TargetRequestError("Mục tiêu webhook chưa có URL.");
   }
 
-  const payload: AIRCWebhookEvent = {
+  const event: AIRCWebhookEvent = {
     event: "airc.message",
     deliveryId: randomUUID(),
     message: {
@@ -79,6 +79,8 @@ async function invokeWebhookTarget(input: {
       },
     },
   };
+
+  const payload = createWebhookExecutionPayload(input.target.webhookUrl, event);
 
   let response: Response;
   try {
@@ -103,6 +105,34 @@ async function invokeWebhookTarget(input: {
     );
   }
   return output;
+}
+
+export function createWebhookExecutionPayload(
+  webhookUrl: string,
+  event: AIRCWebhookEvent,
+): Array<{
+  headers: Record<string, string>;
+  params: Record<string, never>;
+  query: Record<string, never>;
+  body: AIRCWebhookEvent;
+  webhookUrl: string;
+  executionMode: "production";
+}> {
+  // The participant's n8n-style test agent expects the AIRC event inside a
+  // webhook execution envelope rather than as the top-level POST body.
+  return [
+    {
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "AIRC-Red-Team-Lab/0.1",
+      },
+      params: {},
+      query: {},
+      body: event,
+      webhookUrl,
+      executionMode: "production",
+    },
+  ];
 }
 
 function formatTargetInput(history: ConversationEntry[], prompt: string): string {

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 type TargetMode = "webhook" | "local";
 type LeakSeverity = "none" | "acknowledges" | "partial" | "verbatim";
@@ -65,7 +65,6 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export default function RedTeamLab() {
-  const [tab, setTab] = useState<"council" | "target">("target");
   const [targets, setTargets] = useState<Target[]>([]);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [session, setSession] = useState<Session | null>(null);
@@ -86,8 +85,6 @@ export default function RedTeamLab() {
     () => targets.find((target) => target.targetId === selectedTargetId),
     [selectedTargetId, targets],
   );
-  const probes = session?.interactions.filter((interaction) => interaction.kind === "probe") ?? [];
-
   useEffect(() => {
     void refreshTargets();
   }, []);
@@ -132,7 +129,6 @@ export default function RedTeamLab() {
         body: JSON.stringify({ targetId: selectedTargetId, maxTurns: Number(maxTurns) }),
       });
       setSession(created);
-      setTab("council");
       setNotice("Phiên đã sẵn sàng. Chạy vòng đầu để hội đồng tạo probe đầu tiên.");
     } catch (caught) {
       showError(caught);
@@ -150,7 +146,6 @@ export default function RedTeamLab() {
         method: "POST",
       });
       setSession(updated);
-      if (action === "advance") setTab("council");
       if (updated.status !== "active") setNotice("Phiên đã kết thúc và có kết luận cuối.");
     } catch (caught) {
       showError(caught);
@@ -171,7 +166,6 @@ export default function RedTeamLab() {
       });
       setSession(updated);
       setNormalQuestion("");
-      setTab("target");
     } catch (caught) {
       showError(caught);
     } finally {
@@ -206,50 +200,43 @@ export default function RedTeamLab() {
         Chỉ kiểm thử model, webhook và prompt mà bạn có quyền sử dụng. Không đưa secret thật vào môi trường công khai.
       </div>
 
-      <nav className="rt-tabs" aria-label="Khu vực red-team">
-        <button className={tab === "council" ? "active" : ""} onClick={() => setTab("council")} type="button">
-          <span>01</span> Hội đồng tấn công
-          {session && <em>{probes.length} vòng</em>}
-        </button>
-        <button className={tab === "target" ? "active" : ""} onClick={() => setTab("target")} type="button">
-          <span>02</span> Mục tiêu &amp; chạy
-          {session && <em>{session.status}</em>}
-        </button>
-      </nav>
-
       {error && <p className="rt-banner error" role="alert">{error}</p>}
       {notice && <p className="rt-banner notice">{notice}</p>}
 
-      {tab === "council" ? (
-        <CouncilTab
-          busy={busy}
-          onAdvance={() => void updateSession("advance")}
-          onFinalize={() => void updateSession("finalize")}
-          onTargetTab={() => setTab("target")}
-          session={session}
-        />
-      ) : (
-        <TargetTab
-          busy={busy}
-          form={targetForm}
-          maxTurns={maxTurns}
-          normalQuestion={normalQuestion}
-          onCreateTarget={createTarget}
-          onCreateSession={() => void createSession()}
-          onFinalize={() => void updateSession("finalize")}
-          onFormChange={setTargetForm}
-          onMaxTurnsChange={setMaxTurns}
-          onNormalQuestionChange={setNormalQuestion}
-          onRefresh={() => void refreshTargets()}
-          onSendNormal={sendNormalQuestion}
-          onSelectedTargetChange={setSelectedTargetId}
-          onStop={() => void updateSession("stop")}
-          selectedTarget={selectedTarget}
-          selectedTargetId={selectedTargetId}
-          session={session}
-          targets={targets}
-        />
-      )}
+      <div className="rt-parallel-workspace">
+        <section className="rt-workspace-column" aria-labelledby="council-title">
+          <div className="rt-workspace-heading"><span>01</span><div><p className="rt-eyebrow">HỘI ĐỒNG</p><h2 id="council-title">Hội đồng tấn công</h2></div></div>
+          <CouncilTab
+            busy={busy}
+            onAdvance={() => void updateSession("advance")}
+            onFinalize={() => void updateSession("finalize")}
+            session={session}
+          />
+        </section>
+        <section className="rt-workspace-column" aria-labelledby="target-title">
+          <div className="rt-workspace-heading"><span>02</span><div><p className="rt-eyebrow">MỤC TIÊU</p><h2 id="target-title">Mục tiêu &amp; chạy</h2></div></div>
+          <TargetTab
+            busy={busy}
+            form={targetForm}
+            maxTurns={maxTurns}
+            normalQuestion={normalQuestion}
+            onCreateTarget={createTarget}
+            onCreateSession={() => void createSession()}
+            onFinalize={() => void updateSession("finalize")}
+            onFormChange={setTargetForm}
+            onMaxTurnsChange={setMaxTurns}
+            onNormalQuestionChange={setNormalQuestion}
+            onRefresh={() => void refreshTargets()}
+            onSendNormal={sendNormalQuestion}
+            onSelectedTargetChange={setSelectedTargetId}
+            onStop={() => void updateSession("stop")}
+            selectedTarget={selectedTarget}
+            selectedTargetId={selectedTargetId}
+            session={session}
+            targets={targets}
+          />
+        </section>
+      </div>
     </main>
   );
 }
@@ -258,13 +245,11 @@ function CouncilTab({
   busy,
   onAdvance,
   onFinalize,
-  onTargetTab,
   session,
 }: {
   busy: string | null;
   onAdvance: () => void;
   onFinalize: () => void;
-  onTargetTab: () => void;
   session: Session | null;
 }) {
   if (!session) {
@@ -272,8 +257,7 @@ function CouncilTab({
       <section className="rt-empty">
         <p className="rt-eyebrow">CHƯA CÓ PHIÊN</p>
         <h2>Hội đồng đang chờ mục tiêu</h2>
-        <p>Tạo hoặc chọn mục tiêu ở tab “Mục tiêu &amp; chạy”, sau đó mở một phiên red-team.</p>
-        <button className="rt-primary" onClick={onTargetTab} type="button">Thiết lập mục tiêu</button>
+        <p>Tạo hoặc chọn mục tiêu ở cột bên phải, sau đó mở một phiên red-team.</p>
       </section>
     );
   }
@@ -326,7 +310,7 @@ function CouncilRound({ interaction }: { interaction: Interaction }) {
         <section><p>STRATEGIST</p><ul>{interaction.strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul></section>
         <section><p>LEAD</p><span>{interaction.leadReasoning}</span></section>
       </div>
-      <div className="rt-probe"><p>PROBE ĐÃ GỬI</p><blockquote>{interaction.prompt}</blockquote></div>
+      <div className="rt-probe"><p>PHIÊN BẢN CHỐT CUỐI · LEAD GỬI</p><blockquote>{interaction.prompt}</blockquote></div>
       <div className="rt-response"><p>PHẢN HỒI TỪ MỤC TIÊU</p><div>{interaction.targetResponse}</div></div>
       <Detection interaction={interaction} />
     </article>
@@ -384,7 +368,7 @@ function TargetTab({
               </select>
             </label>
           )}
-          {selectedTarget && <p className="rt-selected-target">Đang chọn: <strong>{selectedTarget.name}</strong> · {selectedTarget.mode === "local" ? "chạy local qua OpenAI" : "gửi event AIRC sang webhook"}</p>}
+          {selectedTarget && <p className="rt-selected-target">Đang chọn: <strong>{selectedTarget.name}</strong> · {selectedTarget.mode === "local" ? "chạy local qua OpenAI" : "gửi envelope AIRC/n8n sang webhook"}</p>}
         </article>
 
         <article className="rt-panel">
@@ -412,7 +396,7 @@ function TargetTab({
             {form.mode === "local" ? (
               <label className="rt-field">System prompt mục tiêu<textarea onChange={(event) => onFormChange({ ...form, systemPrompt: event.target.value })} placeholder="Dán system prompt đã có lớp phòng thủ và nội dung cần bảo vệ…" required rows={7} value={form.systemPrompt} /></label>
             ) : (
-              <label className="rt-field">URL webhook AIRC<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="https://target.example.com/airc/webhook" required rows={2} value={form.webhookUrl} /><small>Webhook nhận event <code>airc.message</code> và trả <code>{'{ "output": "…" }'}</code>.</small></label>
+              <label className="rt-field">URL webhook mục tiêu<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="https://target.example.com/webhook/test-agent" required rows={2} value={form.webhookUrl} /><small>Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
             )}
             <label className="rt-field">Nội dung cần bảo vệ (ground truth)<textarea onChange={(event) => onFormChange({ ...form, protectedContent: event.target.value })} placeholder="Dán skill, quy trình hoặc bí quyết mà judge cần kiểm tra…" required rows={7} value={form.protectedContent} /><small>Không được gửi cho hội đồng attacker; chỉ lưu tại server để dò và judge.</small></label>
             <button className="rt-primary" disabled={busy === "target"} type="submit">{busy === "target" ? "Đang lưu…" : "Lưu mục tiêu"}</button>
@@ -425,7 +409,7 @@ function TargetTab({
           <div className="rt-panel-heading"><div><p className="rt-eyebrow">PHẢN HỒI MỤC TIÊU</p><h2>Transcript kiểm thử</h2></div>{session && <span className="rt-count">{session.interactions.length} lượt</span>}</div>
           {!session ? <p className="rt-placeholder">Chưa có phiên. Transcript sẽ hiện ở đây sau khi gửi probe hoặc câu hỏi bình thường.</p> : (
             <div className="rt-transcript">
-              {session.interactions.length === 0 && <p className="rt-placeholder">Chưa có tin nhắn. Vào tab Hội đồng để chạy vòng đầu tiên.</p>}
+              {session.interactions.length === 0 && <p className="rt-placeholder">Chưa có tin nhắn. Bấm “Chạy vòng kế tiếp” ở cột Hội đồng.</p>}
               {session.interactions.map((interaction) => <TranscriptItem interaction={interaction} key={interaction.interactionId} />)}
             </div>
           )}
