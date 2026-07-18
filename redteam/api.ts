@@ -26,7 +26,7 @@ export interface Target {
 }
 
 export interface CreateTargetRequest {
-  name: string;
+  name?: string;
   mode?: TargetMode;
   webhookUrl?: string;
   systemPrompt?: string;
@@ -160,7 +160,7 @@ interface CouncilDecision {
 export const createTarget = api(
   { expose: true, method: "POST", path: "/v1/red-team/targets" },
   async (request: CreateTargetRequest): Promise<Target> => {
-    assertText(request.name, "name", 120);
+    if (request.name?.trim()) assertText(request.name, "name", 120);
     const mode = request.mode ?? "webhook";
     assertTargetMode(mode);
 
@@ -175,7 +175,7 @@ export const createTarget = api(
         target_id, name, mode, webhook_url, system_prompt, protected_content
       )
       VALUES (
-        ${randomUUID()}, ${request.name.trim()}, ${mode},
+        ${randomUUID()}, ${targetName(request.name, request.webhookUrl, mode)}, ${mode},
         ${mode === "webhook" ? request.webhookUrl?.trim() ?? null : null},
         ${mode === "local" ? request.systemPrompt?.trim() ?? null : null},
         ${request.protectedContent?.trim() || null}
@@ -717,6 +717,17 @@ function assertWebhookUrl(value: string | undefined): asserts value is string {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("protocol");
   } catch {
     throw APIError.invalidArgument("webhookUrl phải là URL http hoặc https hợp lệ");
+  }
+}
+
+function targetName(name: string | undefined, webhookUrl: string | undefined, mode: TargetMode): string {
+  const supplied = name?.trim();
+  if (supplied) return supplied;
+  if (mode === "local") return "Mục tiêu local";
+  try {
+    return new URL(webhookUrl ?? "").hostname || "Webhook mục tiêu";
+  } catch {
+    return "Webhook mục tiêu";
   }
 }
 

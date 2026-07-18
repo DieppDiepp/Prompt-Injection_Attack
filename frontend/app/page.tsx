@@ -89,7 +89,6 @@ export default function RedTeamLab() {
   const [maxTurns, setMaxTurns] = useState("6");
   const [normalQuestion, setNormalQuestion] = useState("");
   const [targetForm, setTargetForm] = useState({
-    name: "",
     webhookUrl: "",
   });
   const [comparisonForm, setComparisonForm] = useState({
@@ -129,7 +128,7 @@ export default function RedTeamLab() {
       });
       await refreshTargets();
       setSelectedTargetId(target.targetId);
-      setTargetForm({ name: "", webhookUrl: "" });
+      setTargetForm({ webhookUrl: "" });
       setNotice("Đã lưu mục tiêu webhook. Mỗi phản hồi sẽ được GPT-4o-mini chấm injection ngay sau khi nhận.");
     } catch (caught) {
       showError(caught);
@@ -470,13 +469,13 @@ function CouncilRound({ interaction }: { interaction: Interaction }) {
         <div><p className="rt-eyebrow">VÒNG {String(interaction.roundNumber ?? 0).padStart(2, "0")}</p><h2>Biên bản hội đồng</h2></div>
         <InjectionBadge status={interaction.injectionStatus} />
       </header>
-      <div className="rt-agent-grid">
-        <section><p>ANALYST</p><span>{interaction.analyst}</span></section>
-        <section><p>STRATEGIST</p><ul>{interaction.strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul></section>
-        <section><p>LEAD</p><span>{interaction.leadReasoning}</span></section>
+      <div className="rt-agent-log" aria-label="Trao đổi nội bộ của hội đồng">
+        <section><p>01 · ANALYST → HỘI ĐỒNG</p><span>{interaction.analyst}</span></section>
+        <section><p>02 · STRATEGIST → HỘI ĐỒNG</p><ul>{interaction.strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul></section>
+        <section><p>03 · LEAD → HỘI ĐỒNG</p><span>{interaction.leadReasoning}</span></section>
       </div>
-      <div className="rt-probe"><p>PHIÊN BẢN CHỐT CUỐI · LEAD GỬI</p><blockquote>{interaction.prompt}</blockquote></div>
-      <div className="rt-response"><p>PHẢN HỒI TỪ MỤC TIÊU</p><div>{interaction.targetResponse}</div></div>
+      <div className="rt-probe"><p>04 · LEAD → MỤC TIÊU · PROBE CHỐT</p><blockquote>{interaction.prompt}</blockquote></div>
+      <div className="rt-response"><p>05 · MỤC TIÊU → LEAD · PHẢN HỒI</p><div>{interaction.targetResponse}</div></div>
       <InjectionFinding interaction={interaction} />
     </article>
   );
@@ -503,13 +502,13 @@ function TargetTab({
   targets,
 }: {
   busy: string | null;
-  form: { name: string; webhookUrl: string };
+  form: { webhookUrl: string };
   maxTurns: string;
   normalQuestion: string;
   onCreateTarget: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onCreateSession: () => void;
   onFinalize: () => void;
-  onFormChange: (form: { name: string; webhookUrl: string }) => void;
+  onFormChange: (form: { webhookUrl: string }) => void;
   onMaxTurnsChange: (value: string) => void;
   onNormalQuestionChange: (value: string) => void;
   onRefresh: () => void;
@@ -525,9 +524,9 @@ function TargetTab({
     <section className="rt-target-grid rt-target-config">
       <div className="rt-stack">
         <article className="rt-panel">
-          <div className="rt-panel-heading"><div><p className="rt-eyebrow">MỤC TIÊU</p><h2>Chọn hoặc tạo target</h2></div><button className="rt-text-button" onClick={onRefresh} type="button">Làm mới</button></div>
+          <div className="rt-panel-heading"><div><p className="rt-eyebrow">MỤC TIÊU</p><h2>Chọn hoặc tạo webhook</h2></div><button className="rt-text-button" onClick={onRefresh} type="button">Làm mới</button></div>
           {targets.length > 0 && (
-            <label className="rt-field">Mục tiêu đã lưu
+            <label className="rt-field">Webhook đã lưu
               <select onChange={(event) => onSelectedTargetChange(event.target.value)} value={selectedTargetId}>
                 {targets.map((target) => <option key={target.targetId} value={target.targetId}>{target.name} · {target.mode}</option>)}
               </select>
@@ -553,8 +552,7 @@ function TargetTab({
         <details className="rt-panel rt-create-target" open>
           <summary><span><small>TẠO MỚI · WEBHOOK NHẬP TAY</small> Thêm mục tiêu kiểm thử</span><span>+</span></summary>
           <form onSubmit={onCreateTarget}>
-            <label className="rt-field">Tên mục tiêu<input onChange={(event) => onFormChange({ ...form, name: event.target.value })} placeholder="Model webhook của đối tác" required value={form.name} /></label>
-            <label className="rt-field">URL webhook mục tiêu (nhập tay)<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="Dán URL webhook mà bên model mục tiêu cung cấp" required rows={2} value={form.webhookUrl} /><small>Không có URL mặc định. Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
+            <label className="rt-field">URL webhook mục tiêu (nhập tay)<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="Dán URL webhook mà bên model mục tiêu cung cấp" required rows={2} value={form.webhookUrl} /><small>Không có URL mặc định. Nhãn webhook sẽ tự lấy từ hostname URL. Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
             <button className="rt-primary" disabled={busy === "target"} type="submit">{busy === "target" ? "Đang lưu…" : "Lưu mục tiêu"}</button>
           </form>
         </details>
