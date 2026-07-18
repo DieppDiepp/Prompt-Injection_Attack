@@ -325,7 +325,7 @@ export default function RedTeamLab() {
             An attacker council probes the target; GPT-4o-mini assesses every reply for injection immediately.
           </p>
         </div>
-        <div className="rt-model-badge"><span />Council GPT-5.4-mini · Judge GPT-4o-mini</div>
+        <div className="rt-model-badge"><span />Council DeepSeek V4 Flash · Thinking off · Judge GPT-4o-mini</div>
       </header>
 
       <div className="rt-safety-note">

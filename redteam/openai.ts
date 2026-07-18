@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+const DEEPSEEK_CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions";
 export const REDTEAM_MODEL = "gpt-5.4-mini";
 export const INJECTION_JUDGE_MODEL = "gpt-4o-mini";
+export const REDTEAM_COUNCIL_MODEL = "deepseek-v4-flash";
 
 export class OpenAIRequestError extends Error {}
 
@@ -13,6 +15,15 @@ interface OpenAIResponse {
       type?: string;
       text?: string;
     }>;
+  }>;
+  error?: { message?: string };
+}
+
+interface DeepSeekChatCompletion {
+  choices?: Array<{
+    message?: {
+      content?: unknown;
+    };
   }>;
   error?: { message?: string };
 }
@@ -62,6 +73,51 @@ export async function askOpenAI(input: {
 }
 
 /**
+ * The three attacking-council roles use DeepSeek's OpenAI-compatible Chat
+ * Completions endpoint. `thinking` is explicitly disabled to keep each live
+ * council stage fast and concise.
+ */
+export async function askDeepSeek(input: {
+  instructions: string;
+  input: string;
+  maxOutputTokens: number;
+}): Promise<string> {
+  const response = await fetch(DEEPSEEK_CHAT_COMPLETIONS_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${readDeepSeekKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: REDTEAM_COUNCIL_MODEL,
+      messages: [
+        { role: "system", content: input.instructions },
+        { role: "user", content: input.input },
+      ],
+      max_tokens: input.maxOutputTokens,
+      thinking: { type: "disabled" },
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as DeepSeekChatCompletion;
+  if (!response.ok) {
+    throw new OpenAIRequestError(
+      payload.error?.message
+        ? `DeepSeek API error: ${payload.error.message}`
+        : `DeepSeek API returned HTTP ${response.status}.`,
+    );
+  }
+
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new OpenAIRequestError("DeepSeek API returned no output text.");
+  }
+  return content.trim();
+}
+
+/**
  * A reference is deliberately server-only: it is never accepted from the UI
  * or persisted with a target. For a long prompt prefer a private UTF-8 file
  * path in INJECTION_JUDGE_REFERENCE_FILE rather than an inline environment
@@ -88,6 +144,19 @@ function readOpenAIKey(): string {
 
   throw new OpenAIRequestError(
     "OPENAI_API_KEY is not configured. Set it in the environment or the root .env file.",
+  );
+}
+
+function readDeepSeekKey(): string {
+  const existing = process.env.DEEPSEEK_API_KEY?.trim();
+  if (existing) return existing;
+
+  loadLocalDotEnv();
+  const loaded = process.env.DEEPSEEK_API_KEY?.trim();
+  if (loaded) return loaded;
+
+  throw new OpenAIRequestError(
+    "DEEPSEEK_API_KEY is not configured. Set it in the environment or the root .env file.",
   );
 }
 
