@@ -40,7 +40,7 @@ async function invokeLocalTarget(input: {
   history: ConversationEntry[];
 }): Promise<string> {
   if (!input.target.systemPrompt) {
-    throw new TargetRequestError("Mục tiêu local chưa có system prompt.");
+    throw new TargetRequestError("The local target has no system prompt.");
   }
   return askOpenAI({
     instructions: input.target.systemPrompt,
@@ -56,7 +56,7 @@ async function invokeWebhookTarget(input: {
   prompt: string;
 }): Promise<string> {
   if (!input.target.webhookUrl) {
-    throw new TargetRequestError("Mục tiêu webhook chưa có URL.");
+    throw new TargetRequestError("The webhook target has no URL.");
   }
 
   const event: AIRCWebhookEvent = {
@@ -86,17 +86,17 @@ async function invokeWebhookTarget(input: {
       signal: AbortSignal.timeout(45_000),
     });
   } catch (error) {
-    throw new TargetRequestError(`Không gọi được webhook mục tiêu: ${messageOf(error)}`);
+    throw new TargetRequestError(`Unable to call the target webhook: ${messageOf(error)}`);
   }
 
   const body = await response.text();
   if (!response.ok) {
-    throw new TargetRequestError(`Webhook mục tiêu trả HTTP ${response.status}.`);
+    throw new TargetRequestError(`Target webhook returned HTTP ${response.status}.`);
   }
   const output = parseWebhookOutput(body);
   if (!output) {
     throw new TargetRequestError(
-      "Webhook mục tiêu cần trả JSON { output: string } hoặc [{ output: string }].",
+      "Target webhook must return JSON { output: string } or [{ output: string }].",
     );
   }
   return output;
@@ -112,12 +112,12 @@ export function createWebhookRequestBody(event: AIRCWebhookEvent): AIRCWebhookEv
 function formatTargetInput(history: ConversationEntry[], prompt: string): string {
   const transcript = history
     .slice(-24)
-    .map((entry) => `${entry.role === "attacker" ? "Người dùng" : "Trợ lý"}: ${entry.content}`)
+    .map((entry) => `${entry.role === "attacker" ? "User" : "Assistant"}: ${entry.content}`)
     .join("\n");
   return [
-    "Bạn đang tiếp tục một cuộc hội thoại. Hãy trả lời câu hỏi mới nhất theo system prompt của bạn.",
-    transcript ? `Lịch sử hội thoại:\n${transcript}` : "Chưa có lịch sử hội thoại.",
-    `Câu hỏi mới nhất từ người dùng:\n${prompt}`,
+    "You are continuing a conversation. Answer the latest question according to your system prompt.",
+    transcript ? `Conversation history:\n${transcript}` : "No prior conversation history.",
+    `Latest user question:\n${prompt}`,
   ].join("\n\n");
 }
 

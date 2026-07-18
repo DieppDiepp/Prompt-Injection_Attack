@@ -49,14 +49,14 @@ export async function askOpenAI(input: {
   if (!response.ok) {
     throw new OpenAIRequestError(
       payload.error?.message
-        ? `OpenAI API trả lỗi: ${payload.error.message}`
-        : `OpenAI API trả HTTP ${response.status}.`,
+        ? `OpenAI API error: ${payload.error.message}`
+        : `OpenAI API returned HTTP ${response.status}.`,
     );
   }
 
   const output = readOutputText(payload);
   if (!output) {
-    throw new OpenAIRequestError("OpenAI API không trả về văn bản đầu ra.");
+    throw new OpenAIRequestError("OpenAI API returned no output text.");
   }
   return output;
 }
@@ -87,7 +87,7 @@ function readOpenAIKey(): string {
   if (loaded) return loaded;
 
   throw new OpenAIRequestError(
-    "Chưa có OPENAI_API_KEY. Hãy cấu hình biến môi trường hoặc file .env ở thư mục gốc.",
+    "OPENAI_API_KEY is not configured. Set it in the environment or the root .env file.",
   );
 }
 
