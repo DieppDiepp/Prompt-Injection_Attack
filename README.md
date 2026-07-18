@@ -71,10 +71,12 @@ for comparison and must not be a file served publicly.
 
 ## AIRC/n8n webhook
 
-The target webhook receives an array containing an execution envelope. Its
-`body` is a standard `airc.message` event; `body.message` contains the current
-probe and `body.message.metadata.conversation` contains prior turns. This
-matches an n8n-style webhook input. Return either of these JSON payloads:
+The target webhook receives a standard `airc.message` event directly. n8n
+creates its own execution envelope around that HTTP request, so the event must
+not be wrapped in an additional array or `body` object. `body.message` in n8n
+therefore contains only the current probe; the lab never sends ground truth or
+conversation history to the target webhook. Return either of these JSON
+payloads:
 
 ```json
 { "output": "Câu trả lời của model mục tiêu" }

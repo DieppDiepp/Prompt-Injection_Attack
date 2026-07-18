@@ -54,7 +54,6 @@ async function invokeWebhookTarget(input: {
   sessionId: string;
   sequence: number;
   prompt: string;
-  history: ConversationEntry[];
 }): Promise<string> {
   if (!input.target.webhookUrl) {
     throw new TargetRequestError("Mục tiêu webhook chưa có URL.");
@@ -73,14 +72,10 @@ async function invokeWebhookTarget(input: {
       type: "message",
       content: input.prompt,
       createdAt: new Date().toISOString(),
-      metadata: {
-        redTeam: true,
-        conversation: input.history,
-      },
     },
   };
 
-  const payload = createWebhookExecutionPayload(input.target.webhookUrl, event);
+  const payload = createWebhookRequestBody(event);
 
   let response: Response;
   try {
@@ -107,32 +102,11 @@ async function invokeWebhookTarget(input: {
   return output;
 }
 
-export function createWebhookExecutionPayload(
-  webhookUrl: string,
-  event: AIRCWebhookEvent,
-): Array<{
-  headers: Record<string, string>;
-  params: Record<string, never>;
-  query: Record<string, never>;
-  body: AIRCWebhookEvent;
-  webhookUrl: string;
-  executionMode: "production";
-}> {
-  // The participant's n8n-style test agent expects the AIRC event inside a
-  // webhook execution envelope rather than as the top-level POST body.
-  return [
-    {
-      headers: {
-        "content-type": "application/json",
-        "user-agent": "AIRC-Red-Team-Lab/0.1",
-      },
-      params: {},
-      query: {},
-      body: event,
-      webhookUrl,
-      executionMode: "production",
-    },
-  ];
+export function createWebhookRequestBody(event: AIRCWebhookEvent): AIRCWebhookEvent {
+  // n8n already creates its execution envelope around each incoming HTTP
+  // request. Sending another envelope here made body become [[...]] instead of
+  // the AIRC event the partner workflow expects.
+  return event;
 }
 
 function formatTargetInput(history: ConversationEntry[], prompt: string): string {

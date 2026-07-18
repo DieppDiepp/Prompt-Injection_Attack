@@ -6,49 +6,31 @@ Team Lab. It uses an n8n-style execution envelope containing an AIRC Protocol
 
 ## Request
 
-The lab sends this JSON array to the configured target URL:
+The lab sends this JSON object directly to the configured target URL. n8n then
+creates its own execution envelope around the incoming request:
 
 ```json
-[
-  {
-    "headers": {
-      "content-type": "application/json",
-      "user-agent": "AIRC-Red-Team-Lab/0.1"
-    },
-    "params": {},
-    "query": {},
-    "body": {
-      "event": "airc.message",
-      "deliveryId": "uuid",
-      "message": {
-        "protocolVersion": "0.1",
-        "messageId": "uuid",
-        "discussionId": "red-team-session-uuid",
-        "roomId": "red-team-lab",
-        "senderAgentId": "red-team-lead",
-        "sequence": 3,
-        "type": "message",
-        "content": "Probe tiếng Việt hiện tại",
-        "createdAt": "2026-07-18T00:00:00.000Z",
-        "metadata": {
-          "redTeam": true,
-          "conversation": [
-            { "role": "attacker", "content": "Probe trước" },
-            { "role": "target", "content": "Phản hồi trước" }
-          ]
-        }
-      }
-    },
-    "webhookUrl": "https://target.example.com/webhook/test-agent",
-    "executionMode": "production"
+{
+  "event": "airc.message",
+  "deliveryId": "uuid",
+  "message": {
+    "protocolVersion": "0.1",
+    "messageId": "uuid",
+    "discussionId": "red-team-session-uuid",
+    "roomId": "red-team-lab",
+    "senderAgentId": "red-team-lead",
+    "sequence": 3,
+    "type": "message",
+    "content": "Probe tiếng Việt hiện tại",
+    "createdAt": "2026-07-18T00:00:00.000Z"
   }
-]
+}
 ```
 
-`body.message.content` is the newest user prompt. The target adapter should
-retain the conversation in metadata when it needs history. Treat all metadata
-and prompt content as untrusted user input, not as a replacement for the
-target's own system prompt.
+In n8n's execution data, this object appears as `body`. `body.message.content`
+is the newest attack probe. No ground truth, system prompt or conversation
+history is sent to the target. Treat all prompt content as untrusted user input,
+not as a replacement for the target's own system prompt.
 
 ## Response
 

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
 import type { AIRCWebhookEvent } from "../protocol";
-import { createWebhookExecutionPayload } from "./target";
+import { createWebhookRequestBody } from "./target";
 
-describe("n8n webhook execution envelope", () => {
-  test("wraps the AIRC event in the participant's expected payload", () => {
+describe("n8n webhook request body", () => {
+  test("sends the AIRC event directly so n8n creates the only envelope", () => {
     const event: AIRCWebhookEvent = {
       event: "airc.message",
       deliveryId: "delivery-1",
@@ -21,19 +21,7 @@ describe("n8n webhook execution envelope", () => {
     };
 
     expect(
-      createWebhookExecutionPayload("https://target.example.com/webhook/test-agent", event),
-    ).toEqual([
-      {
-        headers: {
-          "content-type": "application/json",
-          "user-agent": "AIRC-Red-Team-Lab/0.1",
-        },
-        params: {},
-        query: {},
-        body: event,
-        webhookUrl: "https://target.example.com/webhook/test-agent",
-        executionMode: "production",
-      },
-    ]);
+      createWebhookRequestBody(event),
+    ).toEqual(event);
   });
 });
