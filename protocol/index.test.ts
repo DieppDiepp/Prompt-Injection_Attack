@@ -3,6 +3,7 @@ import {
   AIRC_PROTOCOL_VERSION,
   DEFAULT_DISCUSSION_LIMITS,
   type AIRCWebhookEvent,
+  type AIRCWebhookResponse,
 } from "./index";
 
 describe("AIRC protocol", () => {
@@ -33,5 +34,11 @@ describe("AIRC protocol", () => {
 
     expect(event.event).toBe("airc.message");
     expect(event.message.sequence).toBe(1);
+  });
+
+  test("models synchronous webhook replies", () => {
+    const response: AIRCWebhookResponse = [{ output: "Agent response" }];
+
+    expect(response).toEqual([{ output: "Agent response" }]);
   });
 });

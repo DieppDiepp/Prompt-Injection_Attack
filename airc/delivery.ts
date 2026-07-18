@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import log from "encore.dev/log";
 import { Subscription } from "encore.dev/pubsub";
 import type { AIRCWebhookEvent } from "../protocol";
+import { sendMessage } from "./api";
 import { AIRCDB } from "./db";
 import { MessagePublishedTopic, type MessagePublishedEvent } from "./topic";
+import { parseWebhookReply } from "./webhook-response";
 
 interface RecipientRow {
   agent_id: string;
@@ -80,6 +82,8 @@ async function deliverToRecipient(
       throw new Error(`webhook returned HTTP ${response.status}`);
     }
 
+    const reply = parseWebhookReply(await readJSONResponse(response));
+
     await AIRCDB.exec`
       UPDATE webhook_deliveries
       SET status = 'delivered', response_status = ${response.status},
@@ -91,6 +95,10 @@ async function deliverToRecipient(
       agentId: recipient.agent_id,
       deliveryId: claim.delivery_id,
     });
+
+    if (reply) {
+      await saveWebhookReply(event, recipient, reply, claim.delivery_id);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await AIRCDB.exec`
@@ -104,5 +112,49 @@ async function deliverToRecipient(
       error: message,
     });
     throw error;
+  }
+}
+
+async function readJSONResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveWebhookReply(
+  event: MessagePublishedEvent,
+  recipient: RecipientRow,
+  content: string,
+  deliveryId: string,
+): Promise<void> {
+  try {
+    await sendMessage({
+      discussionId: event.message.discussionId,
+      senderAgentId: recipient.agent_id,
+      content,
+      metadata: {
+        inReplyToMessageId: event.message.messageId,
+        webhookDeliveryId: deliveryId,
+      },
+    });
+    log.info("saved AIRC webhook response", {
+      messageId: event.message.messageId,
+      agentId: recipient.agent_id,
+      deliveryId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn("unable to save AIRC webhook response", {
+      messageId: event.message.messageId,
+      agentId: recipient.agent_id,
+      deliveryId,
+      error: message,
+    });
   }
 }

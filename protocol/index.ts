@@ -25,6 +25,15 @@ export interface AIRCWebhookAcknowledgement {
   accepted: boolean;
 }
 
+export interface AIRCWebhookReply {
+  output: string;
+}
+
+export type AIRCWebhookResponse =
+  | AIRCWebhookAcknowledgement
+  | AIRCWebhookReply
+  | AIRCWebhookReply[];
+
 export interface AIRCDiscussionLimits {
   maxMessages: number;
   timeoutSeconds: number;
