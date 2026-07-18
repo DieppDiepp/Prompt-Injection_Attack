@@ -39,6 +39,7 @@ interface Session {
   status: SessionStatus;
   maxTurns: number;
   attackTurnCount: number;
+  attackerContext: string;
   finalInjectionStatus?: InjectionStatus;
   finalInjectionReason?: string;
   finalInjectionEvidence: string[];
@@ -107,6 +108,7 @@ export default function RedTeamLab() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"target" | "session" | "advance" | "benign" | "finalize" | "stop" | "compare" | null>(null);
   const [maxTurns, setMaxTurns] = useState("6");
+  const [attackerContext, setAttackerContext] = useState("");
   const [normalQuestion, setNormalQuestion] = useState("");
   const [targetForm, setTargetForm] = useState({
     webhookUrl: "",
@@ -159,12 +161,20 @@ export default function RedTeamLab() {
 
   async function createSession() {
     if (!selectedTargetId) return;
+    if (!attackerContext.trim()) {
+      setError("Hãy nhập bối cảnh ngắn về chatbot mục tiêu để hội đồng chọn chủ đề kiểm thử.");
+      return;
+    }
     setBusy("session");
     clearMessages();
     try {
       const created = await requestJSON<Session>("/v1/red-team/sessions", {
         method: "POST",
-        body: JSON.stringify({ targetId: selectedTargetId, maxTurns: Number(maxTurns) }),
+        body: JSON.stringify({
+          targetId: selectedTargetId,
+          maxTurns: Number(maxTurns),
+          attackerContext: attackerContext.trim(),
+        }),
       });
       setSession(created);
       setNotice("Phiên đã sẵn sàng. Chạy vòng đầu để hội đồng tạo probe đầu tiên.");
@@ -346,10 +356,12 @@ export default function RedTeamLab() {
           <TargetTab
             busy={busy}
             form={targetForm}
+            attackerContext={attackerContext}
             maxTurns={maxTurns}
             normalQuestion={normalQuestion}
             onCreateTarget={createTarget}
             onCreateSession={() => void createSession()}
+            onAttackerContextChange={setAttackerContext}
             onFinalize={() => void updateSession("finalize")}
             onFormChange={setTargetForm}
             onMaxTurnsChange={setMaxTurns}
@@ -518,6 +530,7 @@ function CouncilTab({
           <div><dt>Loại mục tiêu</dt><dd>{session.target.mode === "local" ? "Local prompt" : "AIRC webhook"}</dd></div>
           <div><dt>Luồng hội thoại</dt><dd>{session.interactions.length} lượt</dd></div>
         </dl>
+        <p className="rt-session-context"><strong>Bối cảnh attacker</strong>{session.attackerContext}</p>
         <div className="rt-progress"><span style={{ width: `${(session.attackTurnCount / session.maxTurns) * 100}%` }} /></div>
         <button className="rt-primary" disabled={!canAdvance || Boolean(busy)} onClick={onAdvance} type="button">
           {busy === "advance" ? "Hội đồng đang phân tích…" : canAdvance ? "Chạy vòng kế tiếp" : "Đã đủ vòng"}
@@ -585,11 +598,13 @@ function TypingMessage({ agent }: { agent: string }) {
 
 function TargetTab({
   busy,
+  attackerContext,
   form,
   maxTurns,
   normalQuestion,
   onCreateTarget,
   onCreateSession,
+  onAttackerContextChange,
   onFinalize,
   onFormChange,
   onMaxTurnsChange,
@@ -604,11 +619,13 @@ function TargetTab({
   targets,
 }: {
   busy: string | null;
+  attackerContext: string;
   form: { webhookUrl: string };
   maxTurns: string;
   normalQuestion: string;
   onCreateTarget: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onCreateSession: () => void;
+  onAttackerContextChange: (value: string) => void;
   onFinalize: () => void;
   onFormChange: (form: { webhookUrl: string }) => void;
   onMaxTurnsChange: (value: string) => void;
@@ -641,6 +658,10 @@ function TargetTab({
           <div className="rt-panel-heading"><div><p className="rt-eyebrow">PHIÊN KIỂM THỬ</p><h2>Chạy red-team</h2></div>{session && <StatusBadge status={session.status} />}</div>
           <label className="rt-field">Số vòng attacker
             <input max="20" min="1" onChange={(event) => onMaxTurnsChange(event.target.value)} type="number" value={maxTurns} />
+          </label>
+          <label className="rt-field">Bối cảnh cho hội đồng attacker
+            <textarea onChange={(event) => onAttackerContextChange(event.target.value)} placeholder="Ví dụ: Chatbot mục tiêu cung cấp thông tin về chăm sóc cây cà phê." required rows={3} value={attackerContext} />
+            <small>Chỉ đưa cho Analyst, Strategist và Lead để chọn chủ đề/probe; không gửi sang webhook mục tiêu.</small>
           </label>
           <button className="rt-primary" disabled={!selectedTarget || Boolean(busy)} onClick={onCreateSession} type="button">
             {busy === "session" ? "Đang tạo phiên…" : "Tạo phiên mới"}

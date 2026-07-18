@@ -58,7 +58,10 @@ encore run
 
 Open `http://localhost:4000`. Under **Tạo mới · webhook nhập tay**, paste the
 URL supplied by the target owner (there is no default webhook URL), create a
-session, then run attacker rounds from the council column. Use **So sánh prompt** to paste or load a local `.txt` defensive prompt
+session, then provide a short **Bối cảnh cho hội đồng attacker** (for example,
+the target's public topic) before running rounds from the council column. This
+context is visible only to the attacker council and is never sent to the target
+webhook. Use **So sánh prompt** to paste or load a local `.txt` defensive prompt
 alongside a regular baseline before testing the remote target.
 
 `OPENAI_API_KEY` is read from the environment first and from `.env` as a local
