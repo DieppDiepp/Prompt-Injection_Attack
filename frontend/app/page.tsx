@@ -6,6 +6,7 @@ type TargetMode = "webhook" | "local";
 type LeakSeverity = "none" | "acknowledges" | "partial" | "verbatim";
 type InjectionStatus = "safe" | "suspicious" | "injected" | "unavailable";
 type SessionStatus = "active" | "stopped" | "completed" | "leaked";
+type CouncilRoundStatus = "analysing" | "analyst_ready" | "strategizing" | "strategist_ready" | "leading" | "lead_ready" | "dispatching" | "completed";
 
 interface Target {
   targetId: string;
@@ -58,6 +59,24 @@ interface PromptComparison {
   defended: PromptComparisonResult;
 }
 
+interface LiveCouncilRound {
+  roundId: string;
+  sessionId: string;
+  roundNumber: number;
+  status: CouncilRoundStatus;
+  analyst?: string;
+  strategies: string[];
+  leadReasoning?: string;
+  probe?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DispatchRoundResponse {
+  round: LiveCouncilRound;
+  session: Session;
+}
+
 class HTTPError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -83,6 +102,7 @@ export default function RedTeamLab() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [session, setSession] = useState<Session | null>(null);
+  const [liveRound, setLiveRound] = useState<LiveCouncilRound | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"target" | "session" | "advance" | "benign" | "finalize" | "stop" | "compare" | null>(null);
@@ -165,6 +185,62 @@ export default function RedTeamLab() {
       });
       setSession(updated);
       if (updated.status !== "active") setNotice("Phiên đã kết thúc và có kết luận cuối.");
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runLiveRound() {
+    if (!session) return;
+    setBusy("advance");
+    clearMessages();
+    const now = new Date().toISOString();
+    setLiveRound({
+      roundId: "pending",
+      sessionId: session.sessionId,
+      roundNumber: session.attackTurnCount + 1,
+      status: "analysing",
+      strategies: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    try {
+      let round = await requestJSON<LiveCouncilRound>(`/v1/red-team/sessions/${session.sessionId}/rounds/begin`, {
+        method: "POST",
+      });
+      setLiveRound(round);
+      await waitForPaint();
+
+      if (round.status === "analyst_ready") {
+        setLiveRound({ ...round, status: "strategizing" });
+        round = await requestJSON<LiveCouncilRound>(`/v1/red-team/rounds/${round.roundId}/strategize`, {
+          method: "POST",
+        });
+        setLiveRound(round);
+        await waitForPaint();
+      }
+
+      if (round.status === "strategist_ready") {
+        setLiveRound({ ...round, status: "leading" });
+        round = await requestJSON<LiveCouncilRound>(`/v1/red-team/rounds/${round.roundId}/lead`, {
+          method: "POST",
+        });
+        setLiveRound(round);
+        await waitForPaint();
+      }
+
+      if (round.status !== "lead_ready") {
+        throw new Error("Vòng hội đồng chưa sẵn sàng để gửi mục tiêu.");
+      }
+      setLiveRound({ ...round, status: "dispatching" });
+      const dispatched = await requestJSON<DispatchRoundResponse>(`/v1/red-team/rounds/${round.roundId}/dispatch`, {
+        method: "POST",
+      });
+      setSession(dispatched.session);
+      setLiveRound(null);
+      if (dispatched.session.status !== "active") setNotice("Phiên đã kết thúc và có kết luận cuối.");
     } catch (caught) {
       showError(caught);
     } finally {
@@ -259,7 +335,8 @@ export default function RedTeamLab() {
           <div className="rt-workspace-heading"><span>01</span><div><p className="rt-eyebrow">HỘI ĐỒNG</p><h2 id="council-title">Hội đồng tấn công</h2></div></div>
           <CouncilTab
             busy={busy}
-            onAdvance={() => void updateSession("advance")}
+            liveRound={liveRound}
+            onAdvance={() => void runLiveRound()}
             onFinalize={() => void updateSession("finalize")}
             session={session}
           />
@@ -407,11 +484,13 @@ function ComparisonResultCard({ label, result }: { label: string; result: Prompt
 
 function CouncilTab({
   busy,
+  liveRound,
   onAdvance,
   onFinalize,
   session,
 }: {
   busy: string | null;
+  liveRound: LiveCouncilRound | null;
   onAdvance: () => void;
   onFinalize: () => void;
   session: Session | null;
@@ -456,6 +535,7 @@ function CouncilTab({
             <p>Analyst sẽ đọc phản hồi, Strategist đưa hướng, và Lead chỉ chọn một probe tự nhiên cho mỗi vòng.</p>
           </article>
         ) : probes.map((interaction) => <CouncilRound interaction={interaction} key={interaction.interactionId} />)}
+        {liveRound && <LiveCouncilRoundCard round={liveRound} />}
         {session.finalInjectionStatus && <FinalResult session={session} />}
       </div>
     </section>
@@ -479,6 +559,28 @@ function CouncilRound({ interaction }: { interaction: Interaction }) {
       <InjectionFinding interaction={interaction} />
     </article>
   );
+}
+
+function LiveCouncilRoundCard({ round }: { round: LiveCouncilRound }) {
+  return (
+    <article className="rt-round rt-live-round" aria-live="polite">
+      <header>
+        <div><p className="rt-eyebrow">LIVE · VÒNG {String(round.roundNumber).padStart(2, "0")}</p><h2>Hội đồng đang trao đổi</h2></div>
+        <span className="rt-live-status"><i />{roundActivityLabel(round.status)}</span>
+      </header>
+      <div className="rt-agent-log" aria-label="Tin nhắn trực tiếp của hội đồng">
+        <section><p>01 · ANALYST → HỘI ĐỒNG</p>{round.analyst ? <span>{round.analyst}</span> : <TypingMessage agent="Analyst" />}</section>
+        <section><p>02 · STRATEGIST → HỘI ĐỒNG</p>{round.strategies.length > 0 ? <ul>{round.strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul> : <TypingMessage agent="Strategist" />}</section>
+        <section><p>03 · LEAD → HỘI ĐỒNG</p>{round.leadReasoning ? <span>{round.leadReasoning}</span> : <TypingMessage agent="Lead" />}</section>
+      </div>
+      {round.probe && <div className="rt-probe"><p>04 · LEAD → MỤC TIÊU · PROBE CHỐT</p><blockquote>{round.probe}</blockquote></div>}
+      {round.status === "dispatching" && <div className="rt-response rt-response-pending"><p>05 · MỤC TIÊU → LEAD</p><TypingMessage agent="Mục tiêu" /></div>}
+    </article>
+  );
+}
+
+function TypingMessage({ agent }: { agent: string }) {
+  return <span className="rt-typing-message">{agent} đang soạn <i /><i /><i /></span>;
 }
 
 function TargetTab({
@@ -610,6 +712,23 @@ function severityLabel(severity: LeakSeverity): string {
 
 function injectionLabel(status: InjectionStatus): string {
   return { safe: "an toàn", suspicious: "đáng ngờ", injected: "đã bị injection", unavailable: "chưa đánh giá" }[status];
+}
+
+function roundActivityLabel(status: CouncilRoundStatus): string {
+  return {
+    analysing: "Analyst đang đọc",
+    analyst_ready: "đang chuyển Strategist",
+    strategizing: "Strategist đang soạn",
+    strategist_ready: "đang chuyển Lead",
+    leading: "Lead đang chốt probe",
+    lead_ready: "đang chuẩn bị gửi",
+    dispatching: "đang gửi mục tiêu",
+    completed: "đã hoàn tất",
+  }[status];
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 function parseError(body: string): string {
