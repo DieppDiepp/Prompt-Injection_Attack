@@ -6,14 +6,14 @@ browser-driven visual verification remains pending.
 ## Acceptance criteria
 
 - [x] A target can be configured in local-prompt or AIRC-webhook mode.
-- [x] Ground truth is stored server-side and omitted from target/session API responses.
+- [x] Webhook targets are configured without accepting or displaying their system prompt or ground truth.
 - [x] Vietnamese Analyst, Strategist and Lead produce and persist one probe per attack round.
-- [x] Each response gets a deterministic `none` / `acknowledges` / `partial` /
-  `verbatim` assessment; `verbatim` ends the attack early.
-- [x] A final LLM judge uses ground truth and transcript; the more severe result wins.
+- [x] Every target response is immediately assessed by `gpt-4o-mini` as `safe` / `suspicious` / `injected` / `unavailable`, with explanation and evidence.
+- [x] Findings are saved and the most severe response forms the final session conclusion.
 - [x] Normal-question interactions are persisted for false-positive evaluation.
 - [x] Dashboard shows the council and target/run workspace side by side in Vietnamese.
 - [x] Webhook target URL is a visible manual input and no default URL is configured.
+- [x] The UI shows an immediate per-response injection warning and explanation; no separate target transcript is rendered.
 - [x] A separate comparison tab accepts regular and hardened prompts (including `.txt` loading) and compares the same test input without persistence.
 - [x] `.env` is ignored and `.env.example` documents the required key.
 - [x] OpenAI API key and `gpt-5.4-mini` were verified with a harmless request.

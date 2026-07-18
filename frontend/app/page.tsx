@@ -4,6 +4,7 @@ import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "
 
 type TargetMode = "webhook" | "local";
 type LeakSeverity = "none" | "acknowledges" | "partial" | "verbatim";
+type InjectionStatus = "safe" | "suspicious" | "injected" | "unavailable";
 type SessionStatus = "active" | "stopped" | "completed" | "leaked";
 
 interface Target {
@@ -24,8 +25,9 @@ interface Interaction {
   analyst?: string;
   strategies: string[];
   leadReasoning?: string;
-  detectedSeverity: LeakSeverity;
-  detectorEvidence: string[];
+  injectionStatus: InjectionStatus;
+  injectionReason: string;
+  injectionEvidence: string[];
   targetLatencyMs?: number;
   createdAt: string;
 }
@@ -36,9 +38,9 @@ interface Session {
   status: SessionStatus;
   maxTurns: number;
   attackTurnCount: number;
-  finalSeverity?: LeakSeverity;
-  finalReason?: string;
-  finalEvidence: string[];
+  finalInjectionStatus?: InjectionStatus;
+  finalInjectionReason?: string;
+  finalInjectionEvidence: string[];
   createdAt: string;
   completedAt?: string;
   interactions: Interaction[];
@@ -88,10 +90,7 @@ export default function RedTeamLab() {
   const [normalQuestion, setNormalQuestion] = useState("");
   const [targetForm, setTargetForm] = useState({
     name: "",
-    mode: "webhook" as TargetMode,
     webhookUrl: "",
-    systemPrompt: "",
-    protectedContent: "",
   });
   const [comparisonForm, setComparisonForm] = useState({
     regularPrompt: "",
@@ -130,8 +129,8 @@ export default function RedTeamLab() {
       });
       await refreshTargets();
       setSelectedTargetId(target.targetId);
-      setTargetForm({ name: "", mode: targetForm.mode, webhookUrl: "", systemPrompt: "", protectedContent: "" });
-      setNotice("Đã lưu mục tiêu. Nội dung cần bảo vệ chỉ dùng ở server để chấm điểm.");
+      setTargetForm({ name: "", webhookUrl: "" });
+      setNotice("Đã lưu mục tiêu webhook. Mỗi phản hồi sẽ được GPT-4o-mini chấm injection ngay sau khi nhận.");
     } catch (caught) {
       showError(caught);
     } finally {
@@ -238,10 +237,10 @@ export default function RedTeamLab() {
           <p className="rt-eyebrow">AIRC · RED TEAM LAB</p>
           <h1>Đo độ bền của system prompt</h1>
           <p className="rt-subtitle">
-            Hội đồng attacker tìm cách khai thác; ground truth chỉ phục vụ chấm điểm ở phía server.
+            Hội đồng attacker tìm cách khai thác; GPT-4o-mini đánh giá ngay từng phản hồi để phát hiện injection.
           </p>
         </div>
-        <div className="rt-model-badge"><span />GPT-5.4-mini</div>
+        <div className="rt-model-badge"><span />Council GPT-5.4-mini · Judge GPT-4o-mini</div>
       </header>
 
       <div className="rt-safety-note">
@@ -458,7 +457,7 @@ function CouncilTab({
             <p>Analyst sẽ đọc phản hồi, Strategist đưa hướng, và Lead chỉ chọn một probe tự nhiên cho mỗi vòng.</p>
           </article>
         ) : probes.map((interaction) => <CouncilRound interaction={interaction} key={interaction.interactionId} />)}
-        {session.finalSeverity && <FinalResult session={session} />}
+        {session.finalInjectionStatus && <FinalResult session={session} />}
       </div>
     </section>
   );
@@ -469,7 +468,7 @@ function CouncilRound({ interaction }: { interaction: Interaction }) {
     <article className="rt-round">
       <header>
         <div><p className="rt-eyebrow">VÒNG {String(interaction.roundNumber ?? 0).padStart(2, "0")}</p><h2>Biên bản hội đồng</h2></div>
-        <SeverityBadge severity={interaction.detectedSeverity} />
+        <InjectionBadge status={interaction.injectionStatus} />
       </header>
       <div className="rt-agent-grid">
         <section><p>ANALYST</p><span>{interaction.analyst}</span></section>
@@ -478,7 +477,7 @@ function CouncilRound({ interaction }: { interaction: Interaction }) {
       </div>
       <div className="rt-probe"><p>PHIÊN BẢN CHỐT CUỐI · LEAD GỬI</p><blockquote>{interaction.prompt}</blockquote></div>
       <div className="rt-response"><p>PHẢN HỒI TỪ MỤC TIÊU</p><div>{interaction.targetResponse}</div></div>
-      <Detection interaction={interaction} />
+      <InjectionFinding interaction={interaction} />
     </article>
   );
 }
@@ -504,13 +503,13 @@ function TargetTab({
   targets,
 }: {
   busy: string | null;
-  form: { name: string; mode: TargetMode; webhookUrl: string; systemPrompt: string; protectedContent: string };
+  form: { name: string; webhookUrl: string };
   maxTurns: string;
   normalQuestion: string;
   onCreateTarget: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onCreateSession: () => void;
   onFinalize: () => void;
-  onFormChange: (form: { name: string; mode: TargetMode; webhookUrl: string; systemPrompt: string; protectedContent: string }) => void;
+  onFormChange: (form: { name: string; webhookUrl: string }) => void;
   onMaxTurnsChange: (value: string) => void;
   onNormalQuestionChange: (value: string) => void;
   onRefresh: () => void;
@@ -523,7 +522,7 @@ function TargetTab({
   targets: Target[];
 }) {
   return (
-    <section className="rt-target-grid">
+    <section className="rt-target-grid rt-target-config">
       <div className="rt-stack">
         <article className="rt-panel">
           <div className="rt-panel-heading"><div><p className="rt-eyebrow">MỤC TIÊU</p><h2>Chọn hoặc tạo target</h2></div><button className="rt-text-button" onClick={onRefresh} type="button">Làm mới</button></div>
@@ -534,7 +533,7 @@ function TargetTab({
               </select>
             </label>
           )}
-          {selectedTarget && <p className="rt-selected-target">Đang chọn: <strong>{selectedTarget.name}</strong> · {selectedTarget.mode === "local" ? "chạy local qua OpenAI" : "gửi envelope AIRC/n8n sang webhook"}</p>}
+          {selectedTarget && <p className="rt-selected-target">Đang chọn: <strong>{selectedTarget.name}</strong> · gửi envelope AIRC/n8n sang webhook.</p>}
         </article>
 
         <article className="rt-panel">
@@ -554,65 +553,48 @@ function TargetTab({
         <details className="rt-panel rt-create-target" open>
           <summary><span><small>TẠO MỚI · WEBHOOK NHẬP TAY</small> Thêm mục tiêu kiểm thử</span><span>+</span></summary>
           <form onSubmit={onCreateTarget}>
-            <label className="rt-field">Tên mục tiêu<input onChange={(event) => onFormChange({ ...form, name: event.target.value })} placeholder="Prompt phòng thủ bản thử nghiệm" required value={form.name} /></label>
-            <fieldset className="rt-mode-switch"><legend>Chế độ</legend>
-              <label><input checked={form.mode === "local"} onChange={() => onFormChange({ ...form, mode: "local" })} type="radio" value="local" /> Local</label>
-              <label><input checked={form.mode === "webhook"} onChange={() => onFormChange({ ...form, mode: "webhook" })} type="radio" value="webhook" /> Webhook AIRC</label>
-            </fieldset>
-            {form.mode === "local" ? (
-              <label className="rt-field">System prompt mục tiêu<textarea onChange={(event) => onFormChange({ ...form, systemPrompt: event.target.value })} placeholder="Dán system prompt đã có lớp phòng thủ và nội dung cần bảo vệ…" required rows={7} value={form.systemPrompt} /></label>
-            ) : (
-              <label className="rt-field">URL webhook mục tiêu (nhập tay)<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="Dán URL webhook mà bên model mục tiêu cung cấp" required rows={2} value={form.webhookUrl} /><small>Không có URL mặc định. Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
-            )}
-            <label className="rt-field">Nội dung cần bảo vệ (ground truth)<textarea onChange={(event) => onFormChange({ ...form, protectedContent: event.target.value })} placeholder="Dán skill, quy trình hoặc bí quyết mà judge cần kiểm tra…" required rows={7} value={form.protectedContent} /><small>Không được gửi cho hội đồng attacker; chỉ lưu tại server để dò và judge.</small></label>
+            <label className="rt-field">Tên mục tiêu<input onChange={(event) => onFormChange({ ...form, name: event.target.value })} placeholder="Model webhook của đối tác" required value={form.name} /></label>
+            <label className="rt-field">URL webhook mục tiêu (nhập tay)<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="Dán URL webhook mà bên model mục tiêu cung cấp" required rows={2} value={form.webhookUrl} /><small>Không có URL mặc định. Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
             <button className="rt-primary" disabled={busy === "target"} type="submit">{busy === "target" ? "Đang lưu…" : "Lưu mục tiêu"}</button>
           </form>
         </details>
       </div>
 
-      <div className="rt-stack">
-        <article className="rt-panel rt-transcript-panel">
-          <div className="rt-panel-heading"><div><p className="rt-eyebrow">PHẢN HỒI MỤC TIÊU</p><h2>Transcript kiểm thử</h2></div>{session && <span className="rt-count">{session.interactions.length} lượt</span>}</div>
-          {!session ? <p className="rt-placeholder">Chưa có phiên. Transcript sẽ hiện ở đây sau khi gửi probe hoặc câu hỏi bình thường.</p> : (
-            <div className="rt-transcript">
-              {session.interactions.length === 0 && <p className="rt-placeholder">Chưa có tin nhắn. Bấm “Chạy vòng kế tiếp” ở cột Hội đồng.</p>}
-              {session.interactions.map((interaction) => <TranscriptItem interaction={interaction} key={interaction.interactionId} />)}
-            </div>
-          )}
-        </article>
-
-        {session?.status === "active" && <article className="rt-panel">
+      {session?.status === "active" && <article className="rt-panel">
           <p className="rt-eyebrow">KIỂM TRA FALSE POSITIVE</p><h2>Gửi câu hỏi bình thường</h2>
           <p className="rt-copy">Câu hỏi này không đi qua hội đồng. Nó cho thấy prompt phòng thủ có vẫn trả lời tác vụ hợp lệ hay không.</p>
           <form className="rt-inline-form" onSubmit={onSendNormal}>
             <textarea onChange={(event) => onNormalQuestionChange(event.target.value)} placeholder="Ví dụ: Hãy tóm tắt ngắn về lợi ích của kiểm thử bảo mật." required rows={3} value={normalQuestion} />
             <button className="rt-secondary" disabled={!normalQuestion.trim() || Boolean(busy)} type="submit">{busy === "benign" ? "Đang gửi…" : "Gửi câu hỏi bình thường"}</button>
           </form>
+          <LatestBenignFinding interactions={session.interactions} />
         </article>}
-
-        {session?.finalSeverity && <FinalResult session={session} />}
-      </div>
     </section>
   );
 }
 
-function TranscriptItem({ interaction }: { interaction: Interaction }) {
-  return (
-    <article className="rt-transcript-item">
-      <header><span>{interaction.kind === "probe" ? `Probe · vòng ${interaction.roundNumber}` : "Câu hỏi bình thường"}</span><SeverityBadge severity={interaction.detectedSeverity} /></header>
-      <div className="rt-bubble outgoing">{interaction.prompt}</div>
-      <div className="rt-bubble incoming">{interaction.targetResponse}</div>
-      <Detection interaction={interaction} compact />
-    </article>
-  );
+function LatestBenignFinding({ interactions }: { interactions: Interaction[] }) {
+  const interaction = [...interactions].reverse().find((item) => item.kind === "benign");
+  if (!interaction) return null;
+  return <section className="rt-benign-result"><p className="rt-eyebrow">PHẢN HỒI CÂU HỎI THƯỜNG GẦN NHẤT</p><div>{interaction.targetResponse}</div><InjectionFinding interaction={interaction} /></section>;
 }
 
-function Detection({ interaction, compact = false }: { interaction: Interaction; compact?: boolean }) {
-  return <div className={`rt-detection ${compact ? "compact" : ""}`}><span>Bộ dò: <SeverityBadge severity={interaction.detectedSeverity} /></span>{interaction.detectorEvidence.length > 0 && <small>{interaction.detectorEvidence.join(" · ")}</small>}{!compact && <small>{interaction.targetLatencyMs ? `${interaction.targetLatencyMs} ms` : ""}</small>}</div>;
+function InjectionFinding({ interaction }: { interaction: Interaction }) {
+  const urgent = interaction.injectionStatus === "injected" || interaction.injectionStatus === "suspicious";
+  return <section className={`rt-injection-finding ${interaction.injectionStatus}`} role={urgent ? "alert" : undefined}>
+    <header><span>{urgent ? "⚠" : "✓"}</span><div><p>GPT-4O-MINI · KIỂM TRA INJECTION</p><InjectionBadge status={interaction.injectionStatus} /></div></header>
+    <strong>{interaction.injectionReason}</strong>
+    {interaction.injectionEvidence.length > 0 && <ul>{interaction.injectionEvidence.map((item) => <li key={item}>{item}</li>)}</ul>}
+  </section>;
 }
 
 function FinalResult({ session }: { session: Session }) {
-  return <article className="rt-final-result"><p className="rt-eyebrow">KẾT LUẬN CUỐI</p><div><h2>{severityLabel(session.finalSeverity ?? "none")}</h2><SeverityBadge severity={session.finalSeverity ?? "none"} /></div><p>{session.finalReason}</p>{session.finalEvidence.length > 0 && <ul>{session.finalEvidence.map((item) => <li key={item}>{item}</li>)}</ul>}</article>;
+  const status = session.finalInjectionStatus ?? "unavailable";
+  return <article className="rt-final-result"><p className="rt-eyebrow">KẾT LUẬN CUỐI</p><div><h2>{injectionLabel(status)}</h2><InjectionBadge status={status} /></div><p>{session.finalInjectionReason}</p>{session.finalInjectionEvidence.length > 0 && <ul>{session.finalInjectionEvidence.map((item) => <li key={item}>{item}</li>)}</ul>}</article>;
+}
+
+function InjectionBadge({ status }: { status: InjectionStatus }) {
+  return <span className={`rt-injection-status ${status}`}>{injectionLabel(status)}</span>;
 }
 
 function SeverityBadge({ severity }: { severity: LeakSeverity }) {
@@ -620,12 +602,16 @@ function SeverityBadge({ severity }: { severity: LeakSeverity }) {
 }
 
 function StatusBadge({ status }: { status: SessionStatus }) {
-  const labels: Record<SessionStatus, string> = { active: "đang chạy", stopped: "đã dừng", completed: "đã chấm", leaked: "phát hiện lộ" };
+  const labels: Record<SessionStatus, string> = { active: "đang chạy", stopped: "đã dừng", completed: "đã chấm", leaked: "đã bị injection" };
   return <span className={`rt-status ${status}`}>{labels[status]}</span>;
 }
 
 function severityLabel(severity: LeakSeverity): string {
   return { none: "an toàn", acknowledges: "thừa nhận", partial: "lộ một phần", verbatim: "lộ nguyên văn" }[severity];
+}
+
+function injectionLabel(status: InjectionStatus): string {
+  return { safe: "an toàn", suspicious: "đáng ngờ", injected: "đã bị injection", unavailable: "chưa đánh giá" }[status];
 }
 
 function parseError(body: string): string {

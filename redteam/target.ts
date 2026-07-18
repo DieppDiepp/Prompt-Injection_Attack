@@ -10,7 +10,7 @@ export interface StoredTarget {
   mode: TargetMode;
   webhookUrl: string | null;
   systemPrompt: string | null;
-  protectedContent: string;
+  protectedContent: string | null;
 }
 
 export interface ConversationEntry {

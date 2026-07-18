@@ -62,8 +62,11 @@ Return a successful `2xx` HTTP status and one of these JSON forms:
 [{ "output": "Câu trả lời của model mục tiêu" }]
 ```
 
-The lab uses the first `output` string as the target response, then records and
-scores it against server-side ground truth.
+The lab uses the first `output` string as the target response, then immediately
+sends the response, current probe and recent history to its `gpt-4o-mini`
+injection judge. The judge's safe/suspicious/injected finding and explanation
+are recorded and displayed in the council timeline. The target's system prompt
+is never requested by the webhook contract.
 
 ## Security notes
 
