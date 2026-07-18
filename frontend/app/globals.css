@@ -1431,3 +1431,20 @@ p {
 .rt-parallel-workspace .council-layout, .rt-parallel-workspace .rt-target-grid { grid-template-columns: 1fr; }
 .rt-parallel-workspace .rt-run-card { position: static; }
 @media (max-width: 1180px) { .rt-parallel-workspace { grid-template-columns: 1fr; } }
+
+.rt-view-tabs { display: flex; gap: 0.35rem; width: fit-content; max-width: 100%; margin: 0 0 1.2rem; padding: 0.3rem; overflow-x: auto; border: 1px solid #cbd5dc; border-radius: 9px; background: #eaf0f3; }
+.rt-view-tabs button { flex: none; padding: 0.6rem 0.85rem; color: #526572; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font: inherit; font-size: 0.84rem; font-weight: 800; white-space: nowrap; }
+.rt-view-tabs button.active { color: #fff; background: #172b3a; }
+.rt-comparison-page { display: grid; gap: 1.2rem; }
+.rt-comparison-intro p:last-child { max-width: 760px; margin: 0.75rem 0 0; color: #536671; line-height: 1.6; }
+.rt-comparison-form, .rt-comparison-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; align-items: start; }
+.rt-comparison-controls { grid-column: 1 / -1; }
+.rt-comparison-controls .rt-primary { width: auto; min-width: 185px; }
+.rt-upload { display: flex; gap: 0.7rem; align-items: center; justify-content: space-between; margin: 0.85rem 0 0; padding: 0.6rem 0.7rem; color: #45616d; border: 1px dashed #a9c2c9; border-radius: 6px; background: #f6fafb; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; }
+.rt-upload input { max-width: 190px; color: #355460; font: inherit; font-size: 0.7rem; }
+.rt-comparison-result { min-height: 220px; }
+.rt-comparison-result > header { display: flex; gap: 0.7rem; align-items: center; justify-content: space-between; }
+.rt-comparison-result > header .rt-eyebrow { margin: 0; }
+.rt-comparison-response { margin: 1rem 0; color: #30444f; font-size: 0.91rem; line-height: 1.65; white-space: pre-wrap; }
+.rt-comparison-result footer { display: grid; gap: 0.35rem; padding-top: 0.7rem; color: #71838d; border-top: 1px solid #e2e9ec; font-family: var(--font-mono); font-size: 0.68rem; line-height: 1.45; }
+@media (max-width: 760px) { .rt-comparison-form, .rt-comparison-results { grid-template-columns: 1fr; }.rt-comparison-controls { grid-column: auto; }.rt-comparison-controls .rt-primary { width: 100%; }.rt-upload { align-items: flex-start; flex-direction: column; }.rt-upload input { max-width: 100%; } }

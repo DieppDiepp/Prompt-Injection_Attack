@@ -24,9 +24,12 @@ authentication and egress controls.
 5. Saves the council transcript, probes, target answers, evidence and final
    result so each run can be reused as an evaluation sample.
 
-The dashboard has two Vietnamese tabs: **Hội đồng tấn công** and **Mục tiêu &
-chạy**. The second tab also supports ordinary questions so a defensive prompt
-can be checked for false positives, not just extraction resistance.
+The default dashboard workspace keeps **Hội đồng tấn công** and **Mục tiêu &
+chạy** side by side. A separate Vietnamese **So sánh prompt** tab runs a
+regular and a hardened prompt independently against the same test input via
+`gpt-5.4-mini`; it never calls a target webhook and does not persist either
+prompt. The target workspace also supports ordinary questions so a defensive
+prompt can be checked for false positives, not just extraction resistance.
 
 ## Leakage guide
 
@@ -54,8 +57,11 @@ npm ci
 encore run
 ```
 
-Open `http://localhost:4000`. Create a target, choose its mode, provide its
-ground truth, create a session, then run attacker rounds from the council tab.
+Open `http://localhost:4000`. Under **Tạo mới · webhook nhập tay**, paste the
+URL supplied by the target owner (there is no default webhook URL), provide
+ground truth, create a session, then run attacker rounds from the council
+column. Use **So sánh prompt** to paste or load a local `.txt` defensive prompt
+alongside a regular baseline before testing the remote target.
 
 `OPENAI_API_KEY` is read from the environment first and from `.env` as a local
 fallback. `.env` is ignored by Git; never commit an API key or a real secret.

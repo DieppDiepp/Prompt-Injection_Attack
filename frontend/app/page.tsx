@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
 
 type TargetMode = "webhook" | "local";
 type LeakSeverity = "none" | "acknowledges" | "partial" | "verbatim";
@@ -44,6 +44,18 @@ interface Session {
   interactions: Interaction[];
 }
 
+interface PromptComparisonResult {
+  response: string;
+  latencyMs: number;
+  severity?: LeakSeverity;
+  evidence: string[];
+}
+
+interface PromptComparison {
+  regular: PromptComparisonResult;
+  defended: PromptComparisonResult;
+}
+
 class HTTPError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -65,21 +77,29 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export default function RedTeamLab() {
+  const [view, setView] = useState<"lab" | "compare">("lab");
   const [targets, setTargets] = useState<Target[]>([]);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState<"target" | "session" | "advance" | "benign" | "finalize" | "stop" | null>(null);
+  const [busy, setBusy] = useState<"target" | "session" | "advance" | "benign" | "finalize" | "stop" | "compare" | null>(null);
   const [maxTurns, setMaxTurns] = useState("6");
   const [normalQuestion, setNormalQuestion] = useState("");
   const [targetForm, setTargetForm] = useState({
     name: "",
-    mode: "local" as TargetMode,
+    mode: "webhook" as TargetMode,
     webhookUrl: "",
     systemPrompt: "",
     protectedContent: "",
   });
+  const [comparisonForm, setComparisonForm] = useState({
+    regularPrompt: "",
+    defendedPrompt: "",
+    testPrompt: "",
+    protectedContent: "",
+  });
+  const [comparison, setComparison] = useState<PromptComparison | null>(null);
 
   const selectedTarget = useMemo(
     () => targets.find((target) => target.targetId === selectedTargetId),
@@ -173,6 +193,34 @@ export default function RedTeamLab() {
     }
   }
 
+  async function comparePrompts(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy("compare");
+    clearMessages();
+    try {
+      const result = await requestJSON<PromptComparison>("/v1/red-team/compare", {
+        method: "POST",
+        body: JSON.stringify({
+          ...comparisonForm,
+          protectedContent: comparisonForm.protectedContent.trim() || undefined,
+        }),
+      });
+      setComparison(result);
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadDefendedPrompt(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const content = await file.text();
+    setComparisonForm((current) => ({ ...current, defendedPrompt: content }));
+    setNotice(`Đã nạp ${file.name}; nội dung chỉ nằm trong trình duyệt cho đến khi bạn chạy so sánh.`);
+  }
+
   function clearMessages() {
     setError("");
     setNotice("");
@@ -200,10 +248,15 @@ export default function RedTeamLab() {
         Chỉ kiểm thử model, webhook và prompt mà bạn có quyền sử dụng. Không đưa secret thật vào môi trường công khai.
       </div>
 
+      <nav className="rt-view-tabs" aria-label="Chế độ làm việc">
+        <button className={view === "lab" ? "active" : ""} onClick={() => setView("lab")} type="button">Phòng lab red-team</button>
+        <button className={view === "compare" ? "active" : ""} onClick={() => setView("compare")} type="button">So sánh prompt</button>
+      </nav>
+
       {error && <p className="rt-banner error" role="alert">{error}</p>}
       {notice && <p className="rt-banner notice">{notice}</p>}
 
-      <div className="rt-parallel-workspace">
+      {view === "lab" ? <div className="rt-parallel-workspace">
         <section className="rt-workspace-column" aria-labelledby="council-title">
           <div className="rt-workspace-heading"><span>01</span><div><p className="rt-eyebrow">HỘI ĐỒNG</p><h2 id="council-title">Hội đồng tấn công</h2></div></div>
           <CouncilTab
@@ -236,8 +289,121 @@ export default function RedTeamLab() {
             targets={targets}
           />
         </section>
-      </div>
+      </div> : <PromptComparisonTab
+        busy={busy}
+        comparison={comparison}
+        form={comparisonForm}
+        onChange={setComparisonForm}
+        onLoadDefendedPrompt={(event) => void loadDefendedPrompt(event)}
+        onSubmit={comparePrompts}
+      />}
     </main>
+  );
+}
+
+function PromptComparisonTab({
+  busy,
+  comparison,
+  form,
+  onChange,
+  onLoadDefendedPrompt,
+  onSubmit,
+}: {
+  busy: string | null;
+  comparison: PromptComparison | null;
+  form: { regularPrompt: string; defendedPrompt: string; testPrompt: string; protectedContent: string };
+  onChange: (form: { regularPrompt: string; defendedPrompt: string; testPrompt: string; protectedContent: string }) => void;
+  onLoadDefendedPrompt: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="rt-comparison-page">
+      <article className="rt-panel rt-comparison-intro">
+        <p className="rt-eyebrow">SO SÁNH CÙNG MỘT ĐẦU VÀO</p>
+        <h2>Prompt thường và prompt đã phòng thủ</h2>
+        <p>
+          Hai prompt được chạy độc lập với cùng một câu test qua GPT-5.4-mini. Tab này không gọi webhook mục tiêu
+          và không lưu prompt vào database.
+        </p>
+      </article>
+
+      <form className="rt-comparison-form" onSubmit={onSubmit}>
+        <article className="rt-panel">
+          <p className="rt-eyebrow">A · BASELINE</p>
+          <h2>Prompt thường</h2>
+          <label className="rt-field">System prompt không có lớp phòng thủ
+            <textarea
+              onChange={(event) => onChange({ ...form, regularPrompt: event.target.value })}
+              placeholder="Dán prompt thường để làm baseline…"
+              required
+              rows={16}
+              value={form.regularPrompt}
+            />
+          </label>
+        </article>
+
+        <article className="rt-panel">
+          <p className="rt-eyebrow">B · HARDENED</p>
+          <h2>Prompt đã phòng thủ</h2>
+          <label className="rt-upload">Nạp từ file .txt
+            <input accept="text/plain,.txt" onChange={onLoadDefendedPrompt} type="file" />
+          </label>
+          <label className="rt-field">System prompt có phòng thủ
+            <textarea
+              onChange={(event) => onChange({ ...form, defendedPrompt: event.target.value })}
+              placeholder="Dán hoặc nạp prompt đã phòng thủ…"
+              required
+              rows={16}
+              value={form.defendedPrompt}
+            />
+          </label>
+        </article>
+
+        <article className="rt-panel rt-comparison-controls">
+          <p className="rt-eyebrow">C · TEST CASE</p>
+          <h2>Câu hỏi dùng chung</h2>
+          <label className="rt-field">Prompt kiểm thử
+            <textarea
+              onChange={(event) => onChange({ ...form, testPrompt: event.target.value })}
+              placeholder="Nhập câu hỏi bình thường hoặc probe muốn so sánh…"
+              required
+              rows={5}
+              value={form.testPrompt}
+            />
+          </label>
+          <label className="rt-field">Ground truth để chấm (không bắt buộc)
+            <textarea
+              onChange={(event) => onChange({ ...form, protectedContent: event.target.value })}
+              placeholder="Dán nội dung cần bảo vệ nếu muốn hiển thị mức rò rỉ…"
+              rows={5}
+              value={form.protectedContent}
+            />
+            <small>Ground truth chỉ được dùng trong request so sánh hiện tại, không được lưu.</small>
+          </label>
+          <button className="rt-primary" disabled={busy === "compare"} type="submit">
+            {busy === "compare" ? "Đang chạy hai prompt…" : "Chạy so sánh"}
+          </button>
+        </article>
+      </form>
+
+      {comparison && <section className="rt-comparison-results" aria-live="polite">
+        <ComparisonResultCard label="A · Prompt thường" result={comparison.regular} />
+        <ComparisonResultCard label="B · Prompt đã phòng thủ" result={comparison.defended} />
+      </section>}
+    </section>
+  );
+}
+
+function ComparisonResultCard({ label, result }: { label: string; result: PromptComparisonResult }) {
+  return (
+    <article className="rt-panel rt-comparison-result">
+      <header><p className="rt-eyebrow">{label}</p>{result.severity ? <SeverityBadge severity={result.severity} /> : <span className="rt-count">chưa chấm</span>}</header>
+      <p className="rt-comparison-response">{result.response}</p>
+      <footer>
+        <span>{result.latencyMs} ms</span>
+        {result.evidence.length > 0 && <span>{result.evidence.join(" · ")}</span>}
+      </footer>
+    </article>
   );
 }
 
@@ -385,8 +551,8 @@ function TargetTab({
           </div>}
         </article>
 
-        <details className="rt-panel rt-create-target">
-          <summary><span><small>TẠO MỚI</small> Thêm mục tiêu kiểm thử</span><span>+</span></summary>
+        <details className="rt-panel rt-create-target" open>
+          <summary><span><small>TẠO MỚI · WEBHOOK NHẬP TAY</small> Thêm mục tiêu kiểm thử</span><span>+</span></summary>
           <form onSubmit={onCreateTarget}>
             <label className="rt-field">Tên mục tiêu<input onChange={(event) => onFormChange({ ...form, name: event.target.value })} placeholder="Prompt phòng thủ bản thử nghiệm" required value={form.name} /></label>
             <fieldset className="rt-mode-switch"><legend>Chế độ</legend>
@@ -396,7 +562,7 @@ function TargetTab({
             {form.mode === "local" ? (
               <label className="rt-field">System prompt mục tiêu<textarea onChange={(event) => onFormChange({ ...form, systemPrompt: event.target.value })} placeholder="Dán system prompt đã có lớp phòng thủ và nội dung cần bảo vệ…" required rows={7} value={form.systemPrompt} /></label>
             ) : (
-              <label className="rt-field">URL webhook mục tiêu<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="https://target.example.com/webhook/test-agent" required rows={2} value={form.webhookUrl} /><small>Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
+              <label className="rt-field">URL webhook mục tiêu (nhập tay)<textarea onChange={(event) => onFormChange({ ...form, webhookUrl: event.target.value })} placeholder="Dán URL webhook mà bên model mục tiêu cung cấp" required rows={2} value={form.webhookUrl} /><small>Không có URL mặc định. Gửi mảng envelope n8n, với event <code>airc.message</code> nằm trong <code>body</code>; webhook trả <code>{'{ "output": "…" }'}</code>.</small></label>
             )}
             <label className="rt-field">Nội dung cần bảo vệ (ground truth)<textarea onChange={(event) => onFormChange({ ...form, protectedContent: event.target.value })} placeholder="Dán skill, quy trình hoặc bí quyết mà judge cần kiểm tra…" required rows={7} value={form.protectedContent} /><small>Không được gửi cho hội đồng attacker; chỉ lưu tại server để dò và judge.</small></label>
             <button className="rt-primary" disabled={busy === "target"} type="submit">{busy === "target" ? "Đang lưu…" : "Lưu mục tiêu"}</button>

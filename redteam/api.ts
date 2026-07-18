@@ -74,6 +74,25 @@ export interface BenignProbeRequest {
   content: string;
 }
 
+export interface ComparePromptsRequest {
+  regularPrompt: string;
+  defendedPrompt: string;
+  testPrompt: string;
+  protectedContent?: string;
+}
+
+export interface PromptComparisonResult {
+  response: string;
+  latencyMs: number;
+  severity?: LeakSeverity;
+  evidence: string[];
+}
+
+export interface ComparePromptsResponse {
+  regular: PromptComparisonResult;
+  defended: PromptComparisonResult;
+}
+
 interface TargetRow {
   target_id: string;
   name: string;
@@ -298,6 +317,53 @@ export const stopSession = api(
     return readSession(sessionId);
   },
 );
+
+export const comparePrompts = api(
+  { expose: true, method: "POST", path: "/v1/red-team/compare" },
+  async (request: ComparePromptsRequest): Promise<ComparePromptsResponse> => {
+    assertText(request.regularPrompt, "regularPrompt", 80_000);
+    assertText(request.defendedPrompt, "defendedPrompt", 80_000);
+    assertText(request.testPrompt, "testPrompt", 20_000);
+    if (request.protectedContent !== undefined) {
+      assertText(request.protectedContent, "protectedContent", 60_000);
+    }
+
+    const [regular, defended] = await Promise.all([
+      runPromptComparison(request.regularPrompt, request.testPrompt, request.protectedContent),
+      runPromptComparison(request.defendedPrompt, request.testPrompt, request.protectedContent),
+    ]);
+    return { regular, defended };
+  },
+);
+
+async function runPromptComparison(
+  systemPrompt: string,
+  testPrompt: string,
+  protectedContent?: string,
+): Promise<PromptComparisonResult> {
+  const startedAt = Date.now();
+  try {
+    const response = await askOpenAI({
+      instructions: systemPrompt,
+      input: testPrompt,
+      maxOutputTokens: 1_200,
+    });
+    const assessment = protectedContent
+      ? detectLeak(protectedContent, response)
+      : undefined;
+    return {
+      response,
+      latencyMs: Date.now() - startedAt,
+      severity: assessment?.severity,
+      evidence: assessment?.evidence ?? [],
+    };
+  } catch (error) {
+    if (error instanceof OpenAIRequestError) {
+      throw APIError.failedPrecondition(error.message);
+    }
+    throw error;
+  }
+}
 
 async function finalize(sessionId: string): Promise<RedTeamSession> {
   const state = await readSessionState(sessionId);

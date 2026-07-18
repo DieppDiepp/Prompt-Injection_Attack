@@ -1,7 +1,7 @@
 # 009 — Red-team MVP checklist
 
-Status: draft — source implementation complete; full Encore runtime verification
-is pending local CLI/dependency recovery.
+Status: draft — source implementation and focused runtime verification complete;
+browser-driven visual verification remains pending.
 
 ## Acceptance criteria
 
@@ -12,12 +12,16 @@ is pending local CLI/dependency recovery.
   `verbatim` assessment; `verbatim` ends the attack early.
 - [x] A final LLM judge uses ground truth and transcript; the more severe result wins.
 - [x] Normal-question interactions are persisted for false-positive evaluation.
-- [x] Dashboard provides separate council and target/run tabs in Vietnamese.
+- [x] Dashboard shows the council and target/run workspace side by side in Vietnamese.
+- [x] Webhook target URL is a visible manual input and no default URL is configured.
+- [x] A separate comparison tab accepts regular and hardened prompts (including `.txt` loading) and compares the same test input without persistence.
 - [x] `.env` is ignored and `.env.example` documents the required key.
 - [x] OpenAI API key and `gpt-5.4-mini` were verified with a harmless request.
 - [x] The detector source type-checks in isolation.
-- [ ] `encore test` passes with full local dependency and infrastructure setup.
-- [ ] `encore check` passes and the UI is visually checked in a local browser.
+- [x] The local Encore health and target-list endpoints respond successfully.
+- [x] Focused detector tests and frontend TypeScript checking pass.
+- [ ] The comparison flow is exercised against a live model with representative prompts.
+- [ ] The UI is visually checked in a local browser.
 
 ## Implementation evidence
 

@@ -12,12 +12,14 @@ and an independent final judge. A verbatim finding ends the automated attack;
 otherwise the session ends at the configured number of rounds or on operator
 finalization.
 
-The dashboard was redesigned around two tabs so operators can separate internal
-attacker reasoning from target configuration, target transcript and benign
-questions. Both local system-prompt evaluation and remote AIRC webhook targets
-are supported.
+The dashboard shows the council alongside target configuration, target
+transcript and benign questions. Target webhook URLs are always entered manually
+by the operator; the application contains no default target URL. A separate
+comparison tab runs regular and hardened prompts independently against the same
+test input without calling a webhook or persisting either prompt. Both local
+system-prompt evaluation and remote AIRC webhook targets are supported.
 
-Known gap: this workstation has a partially created, Windows-locked
-`node_modules` directory and no Encore CLI, so full infrastructure and visual
-runtime checks remain pending. A direct harmless OpenAI Responses request did
-verify the provided local key and `gpt-5.4-mini` model.
+Known gap: browser-driven visual verification is pending because this Windows
+environment blocks the browser automation setup. The local Encore runtime,
+health route and target-list endpoint were verified, and the focused TypeScript
+and detector test checks pass.
